@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"wx_channel/internal/config"
@@ -152,22 +153,10 @@ func (h *CommentHandler) saveCommentData(comments []map[string]interface{}, vide
 		return fmt.Errorf("创建评论数据日期目录失败: %v", err)
 	}
 
-	// 构建文件名
-	var fileName string
-	if videoTitle != "" {
-		// 清理标题作为文件名
-		cleanTitle := utils.CleanFilename(videoTitle)
-		// CleanFilename 已经处理了长度限制（100字符），这里不需要再次限制
-		fileName = fmt.Sprintf("%s_%s_%s.json",
-			saveTime.Format("150405"),
-			videoID,
-			cleanTitle)
-	} else {
-		fileName = fmt.Sprintf("%s_%s_video_%s.json",
-			saveTime.Format("150405"),
-			videoID,
-			saveTime.Format("20060102_150405"))
-	}
+	// 复用视频文件命名规则，确保评论导出和视频保存风格一致
+	baseName := utils.GenerateVideoFilename(videoTitle, videoID)
+	baseName = strings.TrimSuffix(baseName, filepath.Ext(baseName))
+	fileName := baseName + ".json"
 
 	targetPath := utils.GenerateUniqueFilename(dateDir, fileName, 100)
 

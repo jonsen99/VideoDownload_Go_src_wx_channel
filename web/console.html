@@ -1118,6 +1118,18 @@
                                     onchange="toggleAutoCleanupDays()">
                             </div>
                         </div>
+                        <div class="settings-item">
+                            <div class="settings-item-info">
+                                <div class="settings-item-label">启用对标雷达</div>
+                                <div class="settings-item-desc">默认关闭。开启后将在程序下次启动时启用雷达轮询服务</div>
+                            </div>
+                            <div class="settings-item-control">
+                                <input type="checkbox" id="settingRadarEnabled" style="display: none;">
+                                <div class="toggle-switch" id="radarEnabledToggle" onclick="toggleRadarEnabled()">
+                                    <div class="toggle-slider"></div>
+                                </div>
+                            </div>
+                        </div>
                         <div class="settings-item" id="autoCleanupDaysGroup">
                             <div class="settings-item-info">
                                 <div class="settings-item-label">清理天数阈值</div>

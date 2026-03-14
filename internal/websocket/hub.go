@@ -104,6 +104,33 @@ func (h *Hub) GetClient() (*Client, error) {
 	return nil, errors.New("no available client")
 }
 
+// GetClientForKey 获取支持指定 API 的客户端
+func (h *Hub) GetClientForKey(key string) (*Client, error) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	filtered := make(map[*Client]bool)
+	for client := range h.clients {
+		if client.SupportsKey(key) {
+			filtered[client] = true
+		}
+	}
+
+	if len(filtered) == 0 {
+		return nil, fmt.Errorf("no ready client for key: %s", key)
+	}
+
+	if h.selector != nil {
+		return h.selector.Select(filtered)
+	}
+
+	for client := range filtered {
+		return client, nil
+	}
+
+	return nil, fmt.Errorf("no ready client for key: %s", key)
+}
+
 // SetSelector 设置负载均衡选择器
 func (h *Hub) SetSelector(selector ClientSelector) {
 	h.mu.Lock()
@@ -118,9 +145,20 @@ func (h *Hub) ClientCount() int {
 	return len(h.clients)
 }
 
+func (h *Hub) ClientStatuses() []ClientStatus {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	statuses := make([]ClientStatus, 0, len(h.clients))
+	for client := range h.clients {
+		statuses = append(statuses, client.Status())
+	}
+	return statuses
+}
+
 // CallAPI 调用前端 API
 func (h *Hub) CallAPI(key string, body interface{}, timeout time.Duration) (json.RawMessage, error) {
-	client, err := h.GetClient()
+	client, err := h.GetClientForKey(key)
 	if err != nil {
 		return nil, err
 	}

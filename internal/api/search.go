@@ -69,8 +69,8 @@ func (s *SearchService) SearchContact(w http.ResponseWriter, r *http.Request) {
 
 	data, err := s.hub.CallAPI("key:channels:contact_list", body, 60*time.Second)
 	if err != nil {
-		if strings.Contains(err.Error(), "no available client") {
-			response.ErrorWithStatus(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "WeChat client not connected. Please open the target page.")
+		if strings.Contains(err.Error(), "no available client") || strings.Contains(err.Error(), "no ready client") {
+			response.ErrorWithStatus(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "No ready WeChat page is available for search. Please open a supported page and wait for API initialization.")
 			return
 		}
 		response.Error(w, http.StatusInternalServerError, err.Error())
@@ -132,8 +132,8 @@ func (s *SearchService) GetFeedList(w http.ResponseWriter, r *http.Request) {
 
 	data, err := s.hub.CallAPI("key:channels:feed_list", body, 60*time.Second)
 	if err != nil {
-		if strings.Contains(err.Error(), "no available client") {
-			response.ErrorWithStatus(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "WeChat client not connected")
+		if strings.Contains(err.Error(), "no available client") || strings.Contains(err.Error(), "no ready client") {
+			response.ErrorWithStatus(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "No ready WeChat page is available for feed list.")
 			return
 		}
 		response.Error(w, http.StatusInternalServerError, err.Error())
@@ -185,8 +185,8 @@ func (s *SearchService) GetFeedProfile(w http.ResponseWriter, r *http.Request) {
 
 	data, err := s.hub.CallAPI("key:channels:feed_profile", body, 60*time.Second)
 	if err != nil {
-		if strings.Contains(err.Error(), "no available client") {
-			response.ErrorWithStatus(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "WeChat client not connected")
+		if strings.Contains(err.Error(), "no available client") || strings.Contains(err.Error(), "no ready client") {
+			response.ErrorWithStatus(w, http.StatusServiceUnavailable, http.StatusServiceUnavailable, "No ready WeChat page is available for feed profile.")
 			return
 		}
 		response.Error(w, http.StatusInternalServerError, err.Error())
@@ -204,9 +204,34 @@ func (s *SearchService) GetFeedProfile(w http.ResponseWriter, r *http.Request) {
 
 // GetStatus 获取 WebSocket 连接状态
 func (s *SearchService) GetStatus(w http.ResponseWriter, r *http.Request) {
+	clientStatuses := s.hub.ClientStatuses()
+	readyCount := 0
+	searchReadyCount := 0
+	feedReadyCount := 0
+	profileReadyCount := 0
+	for _, client := range clientStatuses {
+		if client.APIReady {
+			readyCount++
+		}
+		if client.SupportsSearch {
+			searchReadyCount++
+		}
+		if client.SupportsFeed {
+			feedReadyCount++
+		}
+		if client.SupportsProfile {
+			profileReadyCount++
+		}
+	}
+
 	status := map[string]interface{}{
-		"connected": s.hub.ClientCount() > 0,
-		"clients":   s.hub.ClientCount(),
+		"connected":            s.hub.ClientCount() > 0,
+		"clients":              s.hub.ClientCount(),
+		"ready_clients":        readyCount,
+		"search_ready_clients": searchReadyCount,
+		"feed_ready_clients":   feedReadyCount,
+		"profile_ready_clients": profileReadyCount,
+		"client_list":          clientStatuses,
 	}
 	response.Success(w, status)
 }

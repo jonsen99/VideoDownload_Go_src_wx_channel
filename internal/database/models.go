@@ -102,6 +102,7 @@ type Settings struct {
 	AutoCleanupEnabled bool   `json:"autoCleanupEnabled"`
 	AutoCleanupDays    int    `json:"autoCleanupDays"`
 	MaxRetries         int    `json:"maxRetries"`
+	RadarEnabled       bool   `json:"radarEnabled"`
 	Theme              string `json:"theme"`
 }
 
@@ -114,6 +115,7 @@ func DefaultSettings() *Settings {
 		AutoCleanupEnabled: false,
 		AutoCleanupDays:    30,
 		MaxRetries:         3,
+		RadarEnabled:       false,
 		Theme:              "light",
 	}
 }

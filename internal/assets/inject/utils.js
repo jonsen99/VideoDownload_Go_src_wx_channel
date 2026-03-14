@@ -1,12 +1,22 @@
 /**
  * @file 工具函数 - 参考 wx_channels_download 项目
  */
+var FakeLocalAPIServerAddr = "localapi.weixin.qq.com";
+var FakeRemoteAPIServerAddr = "remoteapi.weixin.qq.com";
+var FakeOfficialAccountServerAddr = "official.weixin.qq.com";
+var FakeRemoteAPIServerProtocol = "https";
+var FakeLocalAPIServerProtocol = "https";
+var WSServerProtocol = "wss";
+
 var __wx_channels_tip__ = {};
 var __wx_channels_cur_video = null;
 var __wx_channels_store__ = {
   profile: null,
   buffers: [],
   keys: {},
+};
+var __wx_channels_live_store__ = {
+  profile: null,
 };
 
 function __wx_channels_video_decrypt(t, e, p) {
@@ -51,6 +61,7 @@ var WXU = (() => {
   // API 对象
   var WXAPI = {};
   var WXAPI2 = {};
+  var WXAPI4 = {};
 
   // 监听 APILoaded 事件，保存 API 函数
   WXE.onAPILoaded((variables) => {
@@ -70,6 +81,12 @@ var WXU = (() => {
         if (typeof methods.finderSearch === "function") {
           WXAPI2 = methods;
           console.log('[WXU] ✅ WXAPI2 已初始化，包含函数:', Object.keys(methods).slice(0, 10));
+          return;
+        }
+        // 检查是否包含新版交互列表 API（API4 组）
+        if (typeof methods.finderGetInteractionedFeedList === "function") {
+          WXAPI4 = methods;
+          console.log('[WXU] ✅ WXAPI4 已初始化，包含函数:', Object.keys(methods).slice(0, 10));
           return;
         }
       })();
@@ -101,23 +118,43 @@ var WXU = (() => {
   }
 
   function format_feed(feed) {
-    // 处理正在直播的数据（liveStatus === 1 表示正在直播）
-    if (feed.liveInfo && feed.liveInfo.liveStatus === 1) {
-      // 正在直播，返回直播类型数据
-      var liveTitle = feed.liveInfo.description || (feed.objectDesc && feed.objectDesc.description) || '直播中';
+    if (!feed) return null;
+
+    var contact = feed.contact ? {
+      id: feed.contact.username,
+      avatar_url: feed.contact.headUrl,
+      nickname: feed.contact.nickname,
+      username: feed.contact.username,
+    } : null;
+
+    // 处理正在直播的数据
+    if (feed.liveInfo && (feed.liveInfo.liveStatus === 1 || feed.liveInfo.streamUrl)) {
+      var liveTitle = feed.liveInfo.description || feed.description || (feed.objectDesc && feed.objectDesc.description) || '直播中';
+      var liveContact = feed.anchorContact ? {
+        id: feed.anchorContact.username,
+        avatar_url: feed.anchorContact.headUrl,
+        nickname: feed.anchorContact.nickname,
+        username: feed.anchorContact.username,
+      } : contact;
+      var liveCoverUrl = feed.liveInfo.coverUrl ||
+        (feed.anchorContact && feed.anchorContact.liveCoverImgUrl) ||
+        (feed.objectDesc && feed.objectDesc.media && feed.objectDesc.media[0] && (feed.objectDesc.media[0].thumbUrl || feed.objectDesc.media[0].coverUrl)) ||
+        '';
+
       return {
         ...feed,
         type: "live",
         id: feed.id,
         nonce_id: feed.objectNonceId,
         title: clean_html_tags(liveTitle),
-        coverUrl: feed.liveInfo.coverUrl || (feed.objectDesc && feed.objectDesc.media && feed.objectDesc.media[0] && feed.objectDesc.media[0].thumbUrl) || '',
-        thumbUrl: feed.liveInfo.coverUrl || '',
-        nickname: feed.contact ? feed.contact.nickname : '',
-        contact: feed.contact || {},
+        url: feed.liveInfo.streamUrl || "",
+        cover_url: liveCoverUrl,
+        coverUrl: liveCoverUrl,
+        thumbUrl: liveCoverUrl,
+        nickname: liveContact ? liveContact.nickname : '',
+        contact: liveContact,
         createtime: feed.createtime || 0,
         liveInfo: feed.liveInfo,
-        // 直播暂时不能下载
         canDownload: false
       };
     }
@@ -133,23 +170,21 @@ var WXU = (() => {
         id: feed.id,
         nonce_id: feed.objectNonceId,
         cover_url: media.coverUrl,
+        coverUrl: media.thumbUrl || media.coverUrl,
+        thumbUrl: media.thumbUrl || media.coverUrl,
         title: clean_html_tags(feed.objectDesc.description),
         files: feed.objectDesc.media,
         spec: [],
-        contact: feed.contact ? {
-          id: feed.contact.username,
-          avatar_url: feed.contact.headUrl,
-          nickname: feed.contact.nickname,
-        } : null,
+        contact: contact,
+        nickname: contact ? contact.nickname : "",
+        canDownload: true,
       };
     }
     if (type === 4) {
-      // 获取时长（毫秒）：优先使用 spec[0].durationMs，其次使用 videoPlayLen * 1000
       var duration = 0;
       if (media.spec && media.spec.length > 0 && media.spec[0].durationMs) {
         duration = media.spec[0].durationMs;
       } else if (media.videoPlayLen) {
-        // videoPlayLen 单位是秒，需要转换为毫秒
         duration = media.videoPlayLen * 1000;
       }
 
@@ -170,19 +205,14 @@ var WXU = (() => {
         size: media.fileSize,
         duration: duration,
         media: media,
-        contact: feed.contact ? {
-          id: feed.contact.username,
-          avatar_url: feed.contact.headUrl,
-          nickname: feed.contact.nickname,
-        } : null,
-        nickname: feed.contact ? feed.contact.nickname : "",
+        contact: contact,
+        nickname: contact ? contact.nickname : "",
         readCount: feed.readCount,
         likeCount: feed.likeCount,
         commentCount: feed.commentCount,
         favCount: feed.favCount,
         forwardCount: feed.forwardCount,
         ipRegionInfo: feed.ipRegionInfo,
-        // 视频可以下载
         canDownload: true
       };
     }
@@ -258,6 +288,15 @@ var WXU = (() => {
     },
     get API2() {
       return WXAPI2;
+    },
+    get API4() {
+      return WXAPI4;
+    },
+    get APIServerProtocol() {
+      return window.APIServerProtocol || (window.WXVariable && window.WXVariable.Protocol) || FakeLocalAPIServerProtocol;
+    },
+    get WSServerProtocol() {
+      return window.WSServerProtocol || "wss";
     },
     format_feed,
     build_decrypt_arr: __wx_channels_decrypt,

@@ -6,15 +6,24 @@ console.log('[api_client.js] 加载 API 客户端模块');
 window.__wx_api_client = {
   ws: null,
   connected: false,
+  connecting: false,
+  initialized: false,
+  connectToken: 0,
   reconnectTimer: null,
   reconnectDelay: 3000,
   requests: {},
   heartbeatTimer: null,
   lastHeartbeatTime: 0,
   missedHeartbeats: 0,
+  apiMethods: {},
 
   // 初始化
   init: function () {
+    if (this.initialized) {
+      console.log('[API客户端] 已初始化，跳过重复启动');
+      return;
+    }
+    this.initialized = true;
     this.connect();
     this.setupVisibilityHandler();
     this.setupBeforeUnloadHandler();
@@ -73,7 +82,16 @@ window.__wx_api_client = {
 
   // 连接 WebSocket
   connect: function () {
-    var self = this;
+    if (this.connected) {
+      return;
+    }
+    if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+      console.log('[API客户端] 连接已在进行中，跳过重复 connect');
+      return;
+    }
+    this.connecting = true;
+    this.connectToken += 1;
+    var token = this.connectToken;
 
     // 检测代理端口
     // 方法1: 尝试从 /__wx_channels_api 端点获取端口信息
@@ -94,14 +112,19 @@ window.__wx_api_client = {
     }
 
     // 尝试连接
-    this.tryConnect(possiblePorts, 0);
+    this.tryConnect(possiblePorts, 0, token);
   },
 
   // 尝试连接到指定端口
-  tryConnect: function (ports, index) {
+  tryConnect: function (ports, index, token) {
     var self = this;
 
+    if (token !== this.connectToken) {
+      return;
+    }
+
     if (index >= ports.length) {
+      this.connecting = false;
       console.error('[API客户端] 所有端口都连接失败，3秒后重试...');
       this.reconnectTimer = setTimeout(function () {
         self.connect();
@@ -122,20 +145,27 @@ window.__wx_api_client = {
     this.currentPorts = ports;
 
     try {
-      this.ws = new WebSocket(wsUrl);
+      var ws = new WebSocket(wsUrl);
+      this.ws = ws;
 
       // 设置连接超时（5秒）
       var connectTimeout = setTimeout(function () {
-        if (!self.connected && self.ws && self.ws.readyState !== WebSocket.OPEN) {
+        if (token !== self.connectToken) return;
+        if (!self.connected && self.ws === ws && ws.readyState !== WebSocket.OPEN) {
           console.log('[API客户端] 连接超时，尝试下一个端口...');
-          self.ws.close();
-          self.tryConnect(ports, index + 1);
+          ws.close();
+          self.tryConnect(ports, index + 1, token);
         }
       }, 5000);
 
-      this.ws.onopen = function () {
+      ws.onopen = function () {
+        if (token !== self.connectToken || self.ws !== ws) {
+          try { ws.close(); } catch (e) {}
+          return;
+        }
         clearTimeout(connectTimeout);
         self.connected = true;
+        self.connecting = false;
         console.log('[API客户端] ✅ 已连接到后端: ws://127.0.0.1:' + wsPort + '/ws/api');
 
         // 保存成功的端口
@@ -153,9 +183,11 @@ window.__wx_api_client = {
 
         // 启动心跳
         self.startHeartbeat();
+        self.sendClientState();
       };
 
-      this.ws.onmessage = function (event) {
+      ws.onmessage = function (event) {
+        if (token !== self.connectToken || self.ws !== ws) return;
         try {
           var msg = JSON.parse(event.data);
           self.handleMessage(msg);
@@ -164,21 +196,24 @@ window.__wx_api_client = {
         }
       };
 
-      this.ws.onerror = function (error) {
+      ws.onerror = function (error) {
+        if (token !== self.connectToken || self.ws !== ws) return;
         clearTimeout(connectTimeout);
         console.error('[API客户端] ❌ WebSocket 错误:', error);
         // 如果还没有连接成功，尝试下一个端口
         if (!self.connected) {
-          self.tryConnect(ports, index + 1);
+          self.tryConnect(ports, index + 1, token);
         }
       };
 
-      this.ws.onclose = function (event) {
+      ws.onclose = function (event) {
+        if (token !== self.connectToken || self.ws !== ws) return;
         clearTimeout(connectTimeout);
         console.log('[API客户端] 🔌 连接关闭:', event.code, event.reason);
 
         // 停止心跳
         self.stopHeartbeat();
+        self.connecting = false;
 
         if (self.connected) {
           // 之前连接成功过，现在断开了，需要重连
@@ -191,13 +226,14 @@ window.__wx_api_client = {
           }, self.reconnectDelay);
         } else {
           // 连接从未成功，尝试下一个端口
-          self.tryConnect(ports, index + 1);
+          self.tryConnect(ports, index + 1, token);
         }
       };
     } catch (err) {
+      this.connecting = false;
       console.error('[API客户端] ❌ 连接失败:', err);
       // 尝试下一个端口
-      this.tryConnect(ports, index + 1);
+      this.tryConnect(ports, index + 1, token);
     }
   },
 
@@ -207,6 +243,42 @@ window.__wx_api_client = {
       this.handleAPICall(msg.data);
     } else if (msg.type === 'cmd') {
       this.handleCommand(msg.data);
+    } else if (msg.type === 'pong') {
+      this.lastHeartbeatTime = Date.now();
+    }
+  },
+
+  collectClientState: function () {
+    var methods = {};
+    if (window.WXU) {
+      methods.finderGetCommentDetail = !!(window.WXU.API && typeof window.WXU.API.finderGetCommentDetail === 'function');
+      methods.finderUserPage = !!(window.WXU.API && typeof window.WXU.API.finderUserPage === 'function');
+      methods.finderSearch = !!(window.WXU.API2 && typeof window.WXU.API2.finderSearch === 'function');
+      methods.finderGetInteractionedFeedList = !!(window.WXU.API4 && typeof window.WXU.API4.finderGetInteractionedFeedList === 'function');
+    }
+    this.apiMethods = methods;
+    return {
+      pagePath: window.location.pathname,
+      href: window.location.href,
+      apiReady: !!(methods.finderGetCommentDetail || methods.finderUserPage || methods.finderSearch || methods.finderGetInteractionedFeedList),
+      methods: methods,
+      timestamp: Date.now(),
+      userAgent: navigator.userAgent,
+      visible: !document.hidden
+    };
+  },
+
+  sendClientState: function () {
+    if (!this.connected || !this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    try {
+      this.ws.send(JSON.stringify({
+        type: 'client_state',
+        data: this.collectClientState()
+      }));
+    } catch (err) {
+      console.error('[API客户端] 发送客户端状态失败:', err);
     }
   },
 
@@ -487,6 +559,14 @@ if (window.WXE && window.WXE.onInit) {
     if (data && data.mainFinderUsername) {
       window.__wx_username = data.mainFinderUsername;
       console.log('[API客户端] 已获取用户名:', window.__wx_username);
+    }
+  });
+}
+
+if (window.WXE && window.WXE.onAPILoaded) {
+  window.WXE.onAPILoaded(function () {
+    if (window.__wx_api_client) {
+      window.__wx_api_client.sendClientState();
     }
   });
 }

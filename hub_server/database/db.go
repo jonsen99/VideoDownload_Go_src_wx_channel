@@ -80,12 +80,24 @@ func UpsertNode(node *models.Node) error {
 
 	// Update existing fields, but preserve created_at, first_seen, UserID and BindStatus
 	updates := map[string]interface{}{
-		"hostname":   node.Hostname,
-		"version":    node.Version,
-		"ip":         node.IP,
-		"status":     node.Status,
-		"last_seen":  node.LastSeen,
-		"updated_at": time.Now(),
+		"hostname":              node.Hostname,
+		"version":               node.Version,
+		"ip":                    node.IP,
+		"status":                node.Status,
+		"last_seen":             node.LastSeen,
+		"page_path":             node.PagePath,
+		"href":                  node.Href,
+		"api_ready":             node.APIReady,
+		"ws_clients":            node.WSClients,
+		"ready_clients":         node.ReadyClients,
+		"search_ready_clients":  node.SearchReadyClients,
+		"feed_ready_clients":    node.FeedReadyClients,
+		"profile_ready_clients": node.ProfileReadyClients,
+		"supports_search":       node.SupportsSearch,
+		"supports_feed":         node.SupportsFeed,
+		"supports_profile":      node.SupportsProfile,
+		"methods_json":          node.MethodsJSON,
+		"updated_at":            time.Now(),
 	}
 
 	// Update hardware fingerprint if provided

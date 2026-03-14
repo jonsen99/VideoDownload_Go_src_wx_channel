@@ -48,8 +48,8 @@ type Config struct {
 	// 并发与限流
 	UploadChunkConcurrency int           `mapstructure:"upload_chunk_concurrency"`
 	UploadMergeConcurrency int           `mapstructure:"upload_merge_concurrency"`
-	DownloadConcurrency    int           `mapstructure:"download_concurrency"`    // 批量下载并发数（同时下载几个文件）
-	DownloadConnections    int           `mapstructure:"download_connections"`    // 单文件多线程连接数（每个文件用几个线程）
+	DownloadConcurrency    int           `mapstructure:"download_concurrency"` // 批量下载并发数（同时下载几个文件）
+	DownloadConnections    int           `mapstructure:"download_connections"` // 单文件多线程连接数（每个文件用几个线程）
 	DownloadRetryCount     int           `mapstructure:"download_retry_count"`
 	DownloadResumeEnabled  bool          `mapstructure:"download_resume_enabled"`
 	DownloadTimeout        time.Duration `mapstructure:"download_timeout"`
@@ -83,6 +83,9 @@ type Config struct {
 
 	// Hub同步配置
 	HubSync HubSyncConfig `mapstructure:"hub_sync"`
+
+	// 功能开关
+	RadarEnabled bool `mapstructure:"radar_enabled"`
 }
 
 // HubSyncConfig Hub同步配置
@@ -210,8 +213,8 @@ func setDefaults() {
 
 	viper.SetDefault("upload_chunk_concurrency", 4)
 	viper.SetDefault("upload_merge_concurrency", 1)
-	viper.SetDefault("download_concurrency", 5)    // 批量下载并发数：同时下载5个文件
-	viper.SetDefault("download_connections", 8)    // 单文件连接数：每个文件用8个线程
+	viper.SetDefault("download_concurrency", 5) // 批量下载并发数：同时下载5个文件
+	viper.SetDefault("download_connections", 8) // 单文件连接数：每个文件用8个线程
 	viper.SetDefault("download_retry_count", 3)
 	viper.SetDefault("download_resume_enabled", true)
 	viper.SetDefault("download_timeout", 30*time.Minute)
@@ -242,6 +245,9 @@ func setDefaults() {
 	viper.SetDefault("hub_sync.push_enabled", true)
 	viper.SetDefault("hub_sync.push_interval", 5*time.Minute)
 	viper.SetDefault("hub_sync.push_batch_size", 1000)
+
+	// 功能默认值
+	viper.SetDefault("radar_enabled", false)
 }
 
 // GetMachineID 获取或生成唯一的机器 ID (稳定硬件特征码)
@@ -477,6 +483,9 @@ func loadFromDatabase(config *Config) {
 	}
 	if val, err := dbLoader.Get("machine_id"); err == nil && val != "" {
 		config.MachineID = val
+	}
+	if val, err := dbLoader.GetBool("radar_enabled", config.RadarEnabled); err == nil {
+		config.RadarEnabled = val
 	}
 }
 

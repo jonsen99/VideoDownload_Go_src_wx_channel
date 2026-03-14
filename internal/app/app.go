@@ -189,8 +189,13 @@ func (app *App) Run() {
 
 	app.printEnvConfig()
 
-	app.ConsoleAPIHandler = handlers.NewConsoleAPIHandler(app.Cfg, app.WSHub)
 	app.WebSocketHandler = handlers.NewWebSocketHandler()
+
+	// 初始化雷达服务实例（始终创建，按配置决定是否启动）
+	queueService := services.NewQueueService()
+	radarRepo := database.NewRadarRepository()
+	app.RadarService = services.NewRadarService(radarRepo, queueService, app.WSHub)
+	app.ConsoleAPIHandler = handlers.NewConsoleAPIHandler(app.Cfg, app.WSHub, app.RadarService)
 
 	// 初始化新的 API 路由器
 	app.APIRouter = router.NewAPIRouter(app.Cfg, app.WSHub, app.Sunny)
@@ -319,11 +324,13 @@ func (app *App) Run() {
 
 	utils.Info("🔍 请打开需要下载的视频号页面进行下载")
 
-	// 启动对标雷达服务
-	queueService := services.NewQueueService()
-	radarRepo := database.NewRadarRepository()
-	app.RadarService = services.NewRadarService(radarRepo, queueService, app.WSHub)
-	app.RadarService.Start()
+	// 启动对标雷达服务（默认关闭，按配置启用）
+	if app.Cfg.RadarEnabled {
+		app.RadarService.Start()
+		utils.Info("✓ 雷达服务已启用")
+	} else {
+		utils.Info("雷达服务未启用 (radar_enabled: false)")
+	}
 
 	// 4. 【异步】处理 Windows 进程注入和连通性检查 (不阻塞主线程)
 	go func() {
@@ -457,10 +464,10 @@ func (app *App) printTitle() {
 	color.Yellow("    微信视频号下载助手 v%s", app.Cfg.Version)
 	color.Yellow("    项目地址：https://github.com/nobiyou/wx_channel")
 	color.Green("    v%s 更新要点：", app.Cfg.Version)
-	color.Green("    • 雷达重构 - 完全通过 feed_list 提取核心内容，告别超时")
-	color.Green("    • 后台捕获 - 自动无感探测最新视频，支持一键批量下载")
-	color.Green("    • 记录去重 - 修复同一视频下载记录出现多次的冗余 BUG")
-	color.Green("    • 下载优化 - 修复“全部恢复”对 pending 任务不生效的问题")
+	color.Green("    • 新版适配 - 修复首页、Feed、Profile、赞和收藏页面结构变化")
+	color.Green("    • 评论增强 - 兼容新版评论侧栏，支持自动打开与完整采集")
+	color.Green("    • Hub优化 - 智能识别设备页面能力，减少搜索与详情调用失败")
+	color.Green("    • 雷达开关 - 默认关闭，并支持在控制台设置页即时启停")
 	fmt.Println()
 }
 

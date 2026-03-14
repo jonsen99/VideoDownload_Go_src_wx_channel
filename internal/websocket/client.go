@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +26,11 @@ type Client struct {
 	cancel         context.CancelFunc
 	closed         bool
 	lastPing       time.Time
+	lastSeen       time.Time
+	pagePath       string
+	href           string
+	apiReady       bool
+	methods        map[string]bool
 	activeRequests int32 // 活跃请求数（原子操作）
 }
 
@@ -39,6 +45,8 @@ func NewClient(conn *websocket.Conn, hub *Hub) *Client {
 		ctx:        ctx,
 		cancel:     cancel,
 		lastPing:   time.Now(),
+		lastSeen:   time.Now(),
+		methods:    make(map[string]bool),
 	}
 }
 
@@ -53,6 +61,8 @@ func NewClientWithAddr(conn *websocket.Conn, hub *Hub, remoteAddr string) *Clien
 		ctx:        ctx,
 		cancel:     cancel,
 		lastPing:   time.Now(),
+		lastSeen:   time.Now(),
+		methods:    make(map[string]bool),
 	}
 }
 
@@ -110,18 +120,23 @@ func (c *Client) ReadPump() {
 	for {
 
 		// 使用 context 控制读取超时
-		ctx, cancel := context.WithTimeout(c.ctx, 180*time.Second)
+		ctx, cancel := context.WithTimeout(c.ctx, 300*time.Second)
 		messageType, message, err := c.Conn.Read(ctx)
 		cancel()
 
 		if err != nil {
-
-			// 检查是否是正常关闭
-			status := websocket.CloseStatus(err)
-			if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
-				utils.LogInfo("WebSocket 正常关闭")
+			if errors.Is(err, context.DeadlineExceeded) || strings.Contains(err.Error(), "context deadline exceeded") {
+				utils.LogWarn("WebSocket 连接空闲超时，关闭连接: %s", c.RemoteAddr)
+			} else if errors.Is(err, context.Canceled) || strings.Contains(err.Error(), "context canceled") {
+				utils.LogInfo("WebSocket 上下文已取消: %s", c.RemoteAddr)
 			} else {
-				utils.LogError("WebSocket 异常关闭: %v (状态码: %d)", err, status)
+			// 检查是否是正常关闭
+				status := websocket.CloseStatus(err)
+				if status == websocket.StatusNormalClosure || status == websocket.StatusGoingAway {
+					utils.LogInfo("WebSocket 正常关闭")
+				} else {
+					utils.LogError("WebSocket 异常关闭: %v (状态码: %d)", err, status)
+				}
 			}
 			break
 		}
@@ -135,6 +150,24 @@ func (c *Client) ReadPump() {
 		var msg WSMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
 			utils.LogError("消息解析失败: %v", err)
+			continue
+		}
+		c.Touch()
+
+		if msg.Type == WSMessageTypePing {
+			c.TouchPing()
+			pong, _ := json.Marshal(WSMessage{Type: WSMessageTypePong})
+			_ = c.Send(pong)
+			continue
+		}
+
+		if msg.Type == WSMessageTypeClientState {
+			var state ClientStateBody
+			if err := json.Unmarshal(msg.Data, &state); err != nil {
+				utils.LogWarn("客户端状态解析失败: %v", err)
+				continue
+			}
+			c.UpdateState(state)
 			continue
 		}
 
@@ -233,6 +266,97 @@ func (c *Client) pingLoop() {
 			}
 			c.lastPing = time.Now()
 		}
+	}
+}
+
+func (c *Client) Touch() {
+	c.mu.Lock()
+	c.lastSeen = time.Now()
+	c.mu.Unlock()
+}
+
+func (c *Client) TouchPing() {
+	c.mu.Lock()
+	now := time.Now()
+	c.lastPing = now
+	c.lastSeen = now
+	c.mu.Unlock()
+}
+
+func (c *Client) UpdateState(state ClientStateBody) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.pagePath = state.PagePath
+	c.href = state.Href
+	c.apiReady = state.APIReady
+	c.lastSeen = time.Now()
+	if state.Timestamp > 0 {
+		c.lastPing = time.UnixMilli(state.Timestamp)
+	}
+
+	c.methods = make(map[string]bool)
+	for k, v := range state.Methods {
+		c.methods[k] = v
+	}
+
+	utils.LogInfo("WebSocket 客户端状态更新: %s | page=%s | apiReady=%t", c.RemoteAddr, c.pagePath, c.apiReady)
+}
+
+func (c *Client) SupportsKey(key string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if !c.apiReady {
+		return false
+	}
+
+	if len(c.methods) == 0 {
+		return false
+	}
+
+	switch key {
+	case "key:channels:contact_list":
+		return c.methods["finderSearch"]
+	case "key:channels:feed_list":
+		return c.methods["finderUserPage"]
+	case "key:channels:feed_profile":
+		return c.methods["finderGetCommentDetail"]
+	default:
+		return true
+	}
+}
+
+func (c *Client) Status() ClientStatus {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	methods := make(map[string]bool, len(c.methods))
+	for k, v := range c.methods {
+		methods[k] = v
+	}
+
+	lastSeenAt := ""
+	if !c.lastSeen.IsZero() {
+		lastSeenAt = c.lastSeen.Format(time.RFC3339)
+	}
+	lastPingAt := ""
+	if !c.lastPing.IsZero() {
+		lastPingAt = c.lastPing.Format(time.RFC3339)
+	}
+
+	return ClientStatus{
+		RemoteAddr:      c.RemoteAddr,
+		PagePath:        c.pagePath,
+		Href:            c.href,
+		APIReady:        c.apiReady,
+		Methods:         methods,
+		ActiveRequests:  int(atomic.LoadInt32(&c.activeRequests)),
+		LastSeenAt:      lastSeenAt,
+		LastPingAt:      lastPingAt,
+		SupportsSearch:  c.apiReady && methods["finderSearch"],
+		SupportsFeed:    c.apiReady && methods["finderUserPage"],
+		SupportsProfile: c.apiReady && methods["finderGetCommentDetail"],
 	}
 }
 

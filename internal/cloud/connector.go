@@ -85,6 +85,82 @@ func NewConnector(cfg *config.Config, localHub *hubws.Hub) *Connector {
 	return c
 }
 
+type localCapabilitySummary struct {
+	PagePath            string
+	Href                string
+	APIReady            bool
+	WSClients           int
+	ReadyClients        int
+	SearchReadyClients  int
+	FeedReadyClients    int
+	ProfileReadyClients int
+	SupportsSearch      bool
+	SupportsFeed        bool
+	SupportsProfile     bool
+	Methods             map[string]bool
+}
+
+func (c *Connector) collectLocalCapabilities() localCapabilitySummary {
+	summary := localCapabilitySummary{
+		Methods: make(map[string]bool),
+	}
+	if c.local == nil {
+		return summary
+	}
+
+	statuses := c.local.ClientStatuses()
+	summary.WSClients = len(statuses)
+
+	bestScore := -1
+	for _, status := range statuses {
+		if status.APIReady {
+			summary.ReadyClients++
+		}
+		if status.SupportsSearch {
+			summary.SearchReadyClients++
+		}
+		if status.SupportsFeed {
+			summary.FeedReadyClients++
+		}
+		if status.SupportsProfile {
+			summary.ProfileReadyClients++
+		}
+		for method, ok := range status.Methods {
+			if ok {
+				summary.Methods[method] = true
+			}
+		}
+
+		score := 0
+		if status.APIReady {
+			score += 100
+		}
+		if status.SupportsSearch {
+			score += 30
+		}
+		if status.SupportsFeed {
+			score += 20
+		}
+		if status.SupportsProfile {
+			score += 10
+		}
+		if status.Href != "" {
+			score += 5
+		}
+		if score > bestScore {
+			bestScore = score
+			summary.PagePath = status.PagePath
+			summary.Href = status.Href
+		}
+	}
+
+	summary.APIReady = summary.ReadyClients > 0
+	summary.SupportsSearch = summary.SearchReadyClients > 0
+	summary.SupportsFeed = summary.FeedReadyClients > 0
+	summary.SupportsProfile = summary.ProfileReadyClients > 0
+	return summary
+}
+
 // Start 启动连接器
 func (c *Connector) Start() {
 	if c.cfg.CloudHubURL == "" {
@@ -336,11 +412,25 @@ func (c *Connector) sendHeartbeat() error {
 		hwFingerprintJSON = string(fpData)
 	}
 
+	localCaps := c.collectLocalCapabilities()
+
 	payload := HeartbeatPayload{
 		Hostname:            hostname,
 		Version:             c.cfg.Version,
 		Status:              "running",
 		HardwareFingerprint: hwFingerprintJSON,
+		PagePath:            localCaps.PagePath,
+		Href:                localCaps.Href,
+		APIReady:            localCaps.APIReady,
+		WSClients:           localCaps.WSClients,
+		ReadyClients:        localCaps.ReadyClients,
+		SearchReadyClients:  localCaps.SearchReadyClients,
+		FeedReadyClients:    localCaps.FeedReadyClients,
+		ProfileReadyClients: localCaps.ProfileReadyClients,
+		SupportsSearch:      localCaps.SupportsSearch,
+		SupportsFeed:        localCaps.SupportsFeed,
+		SupportsProfile:     localCaps.SupportsProfile,
+		Methods:             localCaps.Methods,
 	}
 	payloadData, _ := json.Marshal(payload)
 

@@ -33,12 +33,13 @@ type ConsoleAPIHandler struct {
 	exportService   *services.ExportService
 	searchService   *services.SearchService
 	wsHub           *websocket.Hub
+	radarService    *services.RadarService
 }
 
 const maxJSONBodyBytes = 8 << 20 // 8MB
 
 // NewConsoleAPIHandler 创建一个新的 ConsoleAPIHandler
-func NewConsoleAPIHandler(cfg *config.Config, wsHub *websocket.Hub) *ConsoleAPIHandler {
+func NewConsoleAPIHandler(cfg *config.Config, wsHub *websocket.Hub, radarService *services.RadarService) *ConsoleAPIHandler {
 	return &ConsoleAPIHandler{
 		browseService:   services.NewBrowseHistoryService(),
 		downloadService: services.NewDownloadRecordService(),
@@ -48,6 +49,7 @@ func NewConsoleAPIHandler(cfg *config.Config, wsHub *websocket.Hub) *ConsoleAPIH
 		exportService:   services.NewExportService(),
 		searchService:   services.NewSearchService(),
 		wsHub:           wsHub,
+		radarService:    radarService,
 	}
 }
 
@@ -765,6 +767,12 @@ func (h *ConsoleAPIHandler) HandleSettingsUpdate(w http.ResponseWriter, r *http.
 		return
 	}
 
+	oldSettings, err := h.settingsRepo.Load()
+	if err != nil {
+		h.sendError(w, r, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	var settings database.Settings
 	if err := h.parseJSON(r, &settings); err != nil {
 		h.sendError(w, r, http.StatusBadRequest, "invalid request body")
@@ -778,7 +786,18 @@ func (h *ConsoleAPIHandler) HandleSettingsUpdate(w http.ResponseWriter, r *http.
 		return
 	}
 
-	h.sendSuccessMessage(w, r, "settings updated")
+	message := "settings updated"
+	if h.radarService != nil && oldSettings != nil && oldSettings.RadarEnabled != settings.RadarEnabled {
+		if settings.RadarEnabled {
+			h.radarService.Start()
+			message = "settings updated, radar enabled"
+		} else {
+			h.radarService.Stop()
+			message = "settings updated, radar disabled"
+		}
+	}
+
+	h.sendSuccessMessage(w, r, message)
 }
 
 // HandleSettingsAPI 路由设置 API 请求

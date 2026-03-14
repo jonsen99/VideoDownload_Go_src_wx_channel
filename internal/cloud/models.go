@@ -26,10 +26,22 @@ type CloudMessage struct {
 
 // HeartbeatPayload 心跳载荷
 type HeartbeatPayload struct {
-	Hostname            string `json:"hostname"`                       // 主机名
-	Version             string `json:"version"`                        // 软件版本
-	Status              string `json:"status"`                         // 运行状态
-	HardwareFingerprint string `json:"hardware_fingerprint,omitempty"` // 硬件指纹 JSON
+	Hostname            string          `json:"hostname"`                        // 主机名
+	Version             string          `json:"version"`                         // 软件版本
+	Status              string          `json:"status"`                          // 运行状态
+	HardwareFingerprint string          `json:"hardware_fingerprint,omitempty"`  // 硬件指纹 JSON
+	PagePath            string          `json:"page_path,omitempty"`             // 当前优先页面路径
+	Href                string          `json:"href,omitempty"`                  // 当前优先页面 URL
+	APIReady            bool            `json:"api_ready,omitempty"`             // 是否至少有一个就绪页面
+	WSClients           int             `json:"ws_clients,omitempty"`            // 本地 WS 页面数量
+	ReadyClients        int             `json:"ready_clients,omitempty"`         // 就绪页面数量
+	SearchReadyClients  int             `json:"search_ready_clients,omitempty"`  // 搜索可用页面数量
+	FeedReadyClients    int             `json:"feed_ready_clients,omitempty"`    // 视频列表可用页面数量
+	ProfileReadyClients int             `json:"profile_ready_clients,omitempty"` // 视频详情可用页面数量
+	SupportsSearch      bool            `json:"supports_search,omitempty"`       // 是否支持搜索
+	SupportsFeed        bool            `json:"supports_feed,omitempty"`         // 是否支持视频列表
+	SupportsProfile     bool            `json:"supports_profile,omitempty"`      // 是否支持视频详情
+	Methods             map[string]bool `json:"methods,omitempty"`               // 本地页面方法合集
 }
 
 // CommandPayload 指令载荷

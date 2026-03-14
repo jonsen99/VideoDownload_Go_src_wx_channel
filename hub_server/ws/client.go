@@ -148,6 +148,7 @@ func (c *Client) handleMessage(msg CloudMessage) {
 		c.mu.Unlock()
 
 		// 更新数据库
+		methodsJSON, _ := json.Marshal(p.Methods)
 		database.UpsertNode(&models.Node{
 			ID:                  c.ID,
 			Hostname:            p.Hostname,
@@ -156,6 +157,18 @@ func (c *Client) handleMessage(msg CloudMessage) {
 			Status:              "online",
 			LastSeen:            now,
 			HardwareFingerprint: p.HardwareFingerprint,
+			PagePath:            p.PagePath,
+			Href:                p.Href,
+			APIReady:            p.APIReady,
+			WSClients:           p.WSClients,
+			ReadyClients:        p.ReadyClients,
+			SearchReadyClients:  p.SearchReadyClients,
+			FeedReadyClients:    p.FeedReadyClients,
+			ProfileReadyClients: p.ProfileReadyClients,
+			SupportsSearch:      p.SupportsSearch,
+			SupportsFeed:        p.SupportsFeed,
+			SupportsProfile:     p.SupportsProfile,
+			MethodsJSON:         string(methodsJSON),
 		})
 
 		// 发送心跳响应（Pong）
@@ -253,7 +266,7 @@ func (c *Client) handleMessage(msg CloudMessage) {
 		if err := syncService.HandleSyncDataFromClient(c.ID, payload.SyncType, records); err != nil {
 			log.Printf("处理同步数据失败: ClientID=%s, Error=%v", c.ID, err)
 		} else {
-			log.Printf("成功同步 %d 条 %s 记录 (客户端: %s)", 
+			log.Printf("成功同步 %d 条 %s 记录 (客户端: %s)",
 				payload.Count, payload.SyncType, c.ID)
 		}
 	}

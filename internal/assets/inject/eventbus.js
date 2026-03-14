@@ -14,11 +14,14 @@ var WXE = (() => {
     PCFlowLoaded: "PCFlowLoaded",
     CategoryFeedsLoaded: "CategoryFeedsLoaded", // 分类视频列表（首页、美食、生活等）
     RecommendFeedsLoaded: "RecommendFeedsLoaded",
+    InteractionedFeedsLoaded: "InteractionedFeedsLoaded", // 赞过/喜欢列表
     UserFeedsLoaded: "UserFeedsLoaded",
     UserLiveReplayLoaded: "UserLiveReplayLoaded", // 直播回放列表
+    LiveUserFeedsLoaded: "LiveUserFeedsLoaded", // 与 wx_channels_download 对齐
     SearchResultLoaded: "SearchResultLoaded", // 搜索结果（包含动态、账号、直播）
     GotoNextFeed: "GotoNextFeed",
     GotoPrevFeed: "GotoPrevFeed",
+    HomeFeedChanged: "HomeFeedChanged",
     FeedProfileLoaded: "OnFeedProfileLoaded",
     LiveProfileLoaded: "OnLiveProfileLoaded",
     JoinLive: "JoinLive",
@@ -79,6 +82,10 @@ var WXE = (() => {
       eventbus.on(ChannelsEvents.RecommendFeedsLoaded, handler);
       return () => { eventbus.off(ChannelsEvents.RecommendFeedsLoaded, handler); };
     },
+    onInteractionedFeedsLoaded(handler) {
+      eventbus.on(ChannelsEvents.InteractionedFeedsLoaded, handler);
+      return () => { eventbus.off(ChannelsEvents.InteractionedFeedsLoaded, handler); };
+    },
     onUserFeedsLoaded(handler) {
       eventbus.on(ChannelsEvents.UserFeedsLoaded, handler);
       return () => { eventbus.off(ChannelsEvents.UserFeedsLoaded, handler); };
@@ -87,9 +94,17 @@ var WXE = (() => {
       eventbus.on(ChannelsEvents.UserLiveReplayLoaded, handler);
       return () => { eventbus.off(ChannelsEvents.UserLiveReplayLoaded, handler); };
     },
+    onLiveUserFeedsLoaded(handler) {
+      eventbus.on(ChannelsEvents.LiveUserFeedsLoaded, handler);
+      return () => { eventbus.off(ChannelsEvents.LiveUserFeedsLoaded, handler); };
+    },
     onSearchResultLoaded(handler) {
       eventbus.on(ChannelsEvents.SearchResultLoaded, handler);
       return () => { eventbus.off(ChannelsEvents.SearchResultLoaded, handler); };
+    },
+    onHomeFeedChanged(handler) {
+      eventbus.on(ChannelsEvents.HomeFeedChanged, handler);
+      return () => { eventbus.off(ChannelsEvents.HomeFeedChanged, handler); };
     },
     onFetchFeedProfile(handler) {
       eventbus.on(ChannelsEvents.FeedProfileLoaded, handler);
@@ -145,6 +160,10 @@ WXE.onGotoNextFeed((feed) => {
 });
 WXE.onGotoPrevFeed((feed) => {
   console.log("[eventbus.js]onGotoPrevFeed", feed);
+  WXE.emit(WXE.Events.Feed, feed);
+});
+WXE.onHomeFeedChanged((feed) => {
+  console.log("[eventbus.js]onHomeFeedChanged", feed);
   WXE.emit(WXE.Events.Feed, feed);
 });
 WXE.onFetchFeedProfile((feed) => {

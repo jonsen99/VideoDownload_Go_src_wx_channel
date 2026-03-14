@@ -128,7 +128,7 @@ func (h *ScriptHandler) HandleHTMLResponse(Conn *SunnyNet.HttpConn, host, path s
 	html = scriptReg2.ReplaceAllString(html, `href="$1.js`+h.version+`"`)
 	Conn.Response.Header.Set("__debug", "append_script")
 
-	if host == "channels.weixin.qq.com" && (path == "/web/pages/feed" || path == "/web/pages/home" || path == "/web/pages/profile" || path == "/web/pages/s") {
+	if host == "channels.weixin.qq.com" && (path == "/web/pages/feed" || path == "/web/pages/home" || path == "/web/pages/profile" || path == "/web/pages/s" || path == "/web/pages/account/like") {
 		// 根据页面路径注入不同的脚本
 		injectedScripts := h.buildInjectedScripts(path)
 		html = strings.Replace(html, "<head>", "<head>\n"+injectedScripts, 1)
@@ -249,6 +249,11 @@ func (h *ScriptHandler) buildInjectedScripts(path string) string {
 		// Profile页面（视频列表）：不需要特定脚本
 		pageSpecificScripts = ""
 		utils.LogFileInfo("[脚本注入] Profile页面 - 仅注入基础脚本")
+
+	case "/web/pages/account/like":
+		// 赞过页面会加载被全局改写的公共 bundle，需要基础脚本环境避免 WXU/WXE 未定义
+		pageSpecificScripts = ""
+		utils.LogFileInfo("[脚本注入] Account Like页面 - 注入基础脚本以兼容公共 JS 事件")
 
 	case "/web/pages/feed":
 		// Feed页面（视频详情）：注入视频缓存监控和评论采集脚本
@@ -1264,20 +1269,14 @@ func (h *ScriptHandler) handleVirtualSvgIcons(path string, content string) (stri
 		return content, false
 	}
 
-	// 拦截 finderPcFlow - 首页推荐视频列表（参考 wx_channels_download 项目）
-	pcFlowRegex := regexp.MustCompile(`(?s)async\s+finderPcFlow\s*\(([^)]+)\)\s*\{(.*?)\}\s*async`)
-	if pcFlowRegex.MatchString(content) {
-		utils.LogFileInfo("[API拦截] ✅ 在virtual_svg-icons-register中成功拦截 finderPcFlow 函数")
-		pcFlowReplace := `async finderPcFlow($1){var result=await(async()=>{$2})();if(result&&result.data&&result.data.object){var feeds=result.data.object;console.log("[API拦截] finderPcFlow 触发 PCFlowLoaded",feeds.length);WXU.emit(WXU.Events.PCFlowLoaded,{feeds:feeds,params:$1});}return result;}async`
-		content = pcFlowRegex.ReplaceAllString(content, pcFlowReplace)
+	// 2026-03-13: 首页改版后，finderPcFlow/finderStream/finderGetRecommend 所在链路
+	// 对首屏当前标签的初始化更敏感。这里暂时停用首页流相关的源码重写，
+	// 先保证 Home 页面刷新和首屏加载稳定，保留 feed/profile/search 等稳定链路。
+	if strings.Contains(content, "finderPcFlow(") {
+		utils.LogFileInfo("[API拦截] ⏭️ 跳过 finderPcFlow 重写，避免干扰新版 Home 首屏初始化")
 	}
-
-	// 拦截 finderStream - 另一种首页推荐列表
-	streamRegex := regexp.MustCompile(`(?s)async\s+finderStream\s*\(([^)]+)\)\s*\{(.*?)\}\s*async`)
-	if streamRegex.MatchString(content) {
-		utils.LogFileInfo("[API拦截] ✅ 在virtual_svg-icons-register中成功拦截 finderStream 函数")
-		streamReplace := `async finderStream($1){var result=await(async()=>{$2})();if(result&&result.data&&result.data.object){var feeds=result.data.object;console.log("[API拦截] finderStream 触发 PCFlowLoaded",feeds.length);WXU.emit(WXU.Events.PCFlowLoaded,{feeds:feeds,params:$1});}return result;}async`
-		content = streamRegex.ReplaceAllString(content, streamReplace)
+	if strings.Contains(content, "finderStream(") {
+		utils.LogFileInfo("[API拦截] ⏭️ 跳过 finderStream 重写，避免干扰新版 Home 首屏初始化")
 	}
 
 	// 拦截 finderGetCommentDetail - 视频详情（参考 wx_channels_download 项目）
@@ -1304,12 +1303,8 @@ func (h *ScriptHandler) handleVirtualSvgIcons(path string, content string) (stri
 		content = liveListRegex.ReplaceAllString(content, liveListReplace)
 	}
 
-	// 拦截分类视频列表API - finderGetRecommend（首页、美食、生活等分类tab）
-	categoryFeedsRegex := regexp.MustCompile(`(?s)async\s+finderGetRecommend\s*\(([^)]+)\)\s*\{(.*?)\}\s*async`)
-	if categoryFeedsRegex.MatchString(content) {
-		utils.LogFileInfo("[API拦截] ✅ 在virtual_svg-icons-register中成功拦截 finderGetRecommend 函数")
-		categoryFeedsReplace := `async finderGetRecommend($1){var result=await(async()=>{$2})();if(result&&result.data&&result.data.object){var feeds=result.data.object;WXU.emit(WXU.Events.CategoryFeedsLoaded,{feeds:feeds,params:$1});}return result;}async`
-		content = categoryFeedsRegex.ReplaceAllString(content, categoryFeedsReplace)
+	if strings.Contains(content, "finderGetRecommend(") {
+		utils.LogFileInfo("[API拦截] ⏭️ 跳过 finderGetRecommend 重写，避免干扰新版 Home 首屏初始化")
 	}
 
 	// 拦截搜索API - finderPCSearch（PC端搜索）
@@ -1419,42 +1414,7 @@ func (h *ScriptHandler) handleConnectPublish(Conn *SunnyNet.HttpConn, path strin
 	}
 
 	utils.LogFileInfo("[Home数据采集] ✅ 正在处理 connect.publish 文件")
-
-	// 首先找到 flowTab 对应的变量名（可能是 yt, nn 或其他）
-	// 格式: flowTab:变量名,flowTabId:
-	flowTabReg := regexp.MustCompile(`flowTab:([a-zA-Z]{1,}),flowTabId:`)
-	flowTabVar := "yt" // 默认值
-	if matches := flowTabReg.FindStringSubmatch(content); len(matches) > 1 {
-		flowTabVar = matches[1]
-		utils.LogFileInfo("[Home数据采集] ✅ 找到 flowTab 变量名: %s", flowTabVar)
-	} else {
-		utils.LogFileInfo("[Home数据采集] ⚠️ 未找到 flowTab 变量名，使用默认值: %s", flowTabVar)
-	}
-
-	// 参考 wx_channels_download 项目的正则表达式，匹配函数定义而不是函数调用
-	// 原始代码格式: goToNextFlowFeed:函数名 或 goToPrevFlowFeed:函数名
-	goToNextFlowReg := regexp.MustCompile(`goToNextFlowFeed:([a-zA-Z]{1,})`)
-	goToPrevFlowReg := regexp.MustCompile(`goToPrevFlowFeed:([a-zA-Z]{1,})`)
-
-	// 替换 goToNextFlowFeed 函数定义 - 使用 WXU.emit 发送事件（与 wx_channels_download 完全一致）
-	if goToNextFlowReg.MatchString(content) {
-		utils.LogFileInfo("[Home数据采集] ✅ 在connect.publish中成功拦截 goToNextFlowFeed 函数定义")
-		// 使用动态获取的 flowTab 变量名
-		jsGoNextFeed := fmt.Sprintf("goToNextFlowFeed:async function(v){await $1(v);console.log('goToNextFlowFeed',%s);if(!%s||!%s.value.feeds){return;}var feed=%s.value.feeds[%s.value.currentFeedIndex];console.log('before GotoNextFeed',%s,feed);WXU.emit(WXU.Events.GotoNextFeed,feed);}", flowTabVar, flowTabVar, flowTabVar, flowTabVar, flowTabVar, flowTabVar)
-		content = goToNextFlowReg.ReplaceAllString(content, jsGoNextFeed)
-	} else {
-		utils.LogFileInfo("[Home数据采集] ❌ 在connect.publish中未找到 goToNextFlowFeed 函数定义")
-	}
-
-	// 替换 goToPrevFlowFeed 函数定义 - 使用 WXU.emit 发送事件
-	if goToPrevFlowReg.MatchString(content) {
-		utils.LogFileInfo("[Home数据采集] ✅ 在connect.publish中成功拦截 goToPrevFlowFeed 函数定义")
-		// 使用动态获取的 flowTab 变量名
-		jsGoPrevFeed := fmt.Sprintf("goToPrevFlowFeed:async function(v){await $1(v);console.log('goToPrevFlowFeed',%s);if(!%s||!%s.value.feeds){return;}var feed=%s.value.feeds[%s.value.currentFeedIndex];console.log('before GotoPrevFeed',%s,feed);WXU.emit(WXU.Events.GotoPrevFeed,feed);}", flowTabVar, flowTabVar, flowTabVar, flowTabVar, flowTabVar, flowTabVar)
-		content = goToPrevFlowReg.ReplaceAllString(content, jsGoPrevFeed)
-	} else {
-		utils.LogFileInfo("[Home数据采集] ❌ 在connect.publish中未找到 goToPrevFlowFeed 函数定义")
-	}
+	utils.LogFileInfo("[Home数据采集] ⏭️ 跳过 goToNextFlowFeed/goToPrevFlowFeed 重写，避免干扰新版 Home 状态机")
 
 	// 禁用浏览器缓存，确保每次都能拦截到最新的代码
 	Conn.Response.Header.Set("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -1481,6 +1441,7 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 	var currentFeedId = '';
 	var saveDebounceTimer = null;
 	var stableDataCount = 0;
+	var lastProgressText = '';
 	
 	// 工具函数：查找 Vue/Pinia Store
 	function findFeedStore() {
@@ -1500,12 +1461,253 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 			// 尝试从不同路径获取 feed store
 			if (pinia._s && pinia._s.feed) return pinia._s.feed;
 			if (pinia.state && pinia.state._value && pinia.state._value.feed) return pinia.state._value.feed;
+			if (pinia._s && typeof pinia._s.forEach === 'function') {
+				var matchedStore = null;
+				pinia._s.forEach(function(candidate) {
+					if (matchedStore) return;
+					try {
+						var state = (candidate && candidate.$state) || candidate;
+						if (!state || typeof state !== 'object') return;
+						if (state.commentList || state.comments || state.replyList || state.commentData) {
+							matchedStore = candidate;
+						}
+					} catch (_) {}
+				});
+				if (matchedStore) return matchedStore;
+			}
 			
 			return null;
 		} catch (e) {
 			console.error('[评论采集] 查找Store失败:', e);
 			return null;
 		}
+	}
+
+	function isCommentItem(item) {
+		if (!item || typeof item !== 'object') return false;
+		if (!('content' in item) && !('text' in item) && !('commentId' in item) && !('id' in item)) return false;
+		return !!(
+			item.author ||
+			item.nickname ||
+			item.userInfo ||
+			item.commentId ||
+			item.levelTwoComment ||
+			item.replyList ||
+			item.replyCommentList ||
+			item.subCommentList ||
+			item.children
+		);
+	}
+
+	function getReplyList(item) {
+		if (!item || typeof item !== 'object') return [];
+		var replyKeys = ['levelTwoComment', 'replyList', 'replyCommentList', 'subCommentList', 'children', 'subComments', 'replies'];
+		for (var i = 0; i < replyKeys.length; i++) {
+			var value = item[replyKeys[i]];
+			if (Array.isArray(value)) return value;
+			if (value && Array.isArray(value.items)) return value.items;
+			if (value && value.dataList && Array.isArray(value.dataList.items)) return value.dataList.items;
+		}
+		return [];
+	}
+
+	function parseCommentTotalFromDOM() {
+		var selectors = [
+			'.comment-drawer [class*="header"]',
+			'.comment-panel [class*="header"]',
+			'.comment-list [class*="header"]',
+			'[class*="drawer"] [class*="header"]',
+			'.drawer-header',
+			'.comment-header'
+		];
+		var best = 0;
+
+		for (var i = 0; i < selectors.length; i++) {
+			var nodes = document.querySelectorAll(selectors[i]);
+			for (var j = 0; j < nodes.length; j++) {
+				var node = nodes[j];
+				if (!node || node.offsetParent === null) continue;
+				var text = (node.innerText || node.textContent || '').replace(/\s+/g, ' ').trim();
+				if (!text || text.length > 60) continue;
+				var match = text.match(/评论[^\d]{0,8}(\d+)/);
+				if (match) {
+					var value = parseInt(match[1], 10) || 0;
+					if (value > best) best = value;
+				}
+			}
+		}
+
+		if (best > 0) return best;
+
+		var bodyText = document.body ? (document.body.innerText || '') : '';
+		var allMatches = bodyText.match(/评论[^\d]{0,8}(\d+)/g) || [];
+		for (var k = 0; k < allMatches.length; k++) {
+			var parsed = parseInt((allMatches[k].match(/(\d+)/) || [])[1], 10) || 0;
+			if (parsed > best) best = parsed;
+		}
+		return best;
+	}
+
+	function getCommentTextFromNode(node) {
+		if (!node) return '';
+		var clone = node.cloneNode(true);
+		var extraNodes = clone.querySelectorAll('.comment-row.actions, .comment-item__extra, .context-menu-wrp, .hover-show');
+		for (var i = 0; i < extraNodes.length; i++) {
+			extraNodes[i].remove();
+		}
+		return (clone.textContent || '').replace(/\s+/g, ' ').trim();
+	}
+
+	function parseCommentNode(node) {
+		if (!node) return null;
+		var contentNode = node.querySelector('.comment-content');
+		var userNode = node.querySelector('.comment-user-name');
+		if (!contentNode || !userNode) return null;
+
+		var regionNodes = node.querySelectorAll('.region-text');
+		var likeNode = node.querySelector('.like-num');
+		var avatarNode = node.querySelector('.comment-avatar');
+		var authorLikedNode = node.querySelector('.author-liked');
+		var replyNodes = node.querySelectorAll(':scope > .comment-item__extra > .comment-reply-list > .comment-item');
+		var replies = [];
+		for (var i = 0; i < replyNodes.length; i++) {
+			var parsedReply = parseCommentNode(replyNodes[i]);
+			if (parsedReply) replies.push(parsedReply);
+		}
+
+		return {
+			id: node.getAttribute('data-comment-id') || node.getAttribute('comment-id') || '',
+			content: getCommentTextFromNode(contentNode),
+			createTime: regionNodes[1] ? regionNodes[1].textContent.trim() : '',
+			likeCount: likeNode ? parseInt((likeNode.textContent || '').replace(/[^\d]/g, ''), 10) || 0 : 0,
+			nickname: userNode.textContent.trim(),
+			headUrl: avatarNode ? avatarNode.src || '' : '',
+			ipLocation: regionNodes[0] ? regionNodes[0].textContent.trim() : '',
+			authorLiked: !!authorLikedNode,
+			levelTwoComment: replies,
+			expandCommentCount: replies.length
+		};
+	}
+
+	function extractCommentPayloadFromDOM() {
+		var roots = document.querySelectorAll('.comment-item');
+		if (!roots || !roots.length) return null;
+
+		var topLevel = [];
+		for (var i = 0; i < roots.length; i++) {
+			var node = roots[i];
+			if (node.closest('.comment-reply-list .comment-item')) continue;
+			var parsed = parseCommentNode(node);
+			if (parsed) topLevel.push(parsed);
+		}
+
+		if (!topLevel.length) return null;
+
+		var loadingNode = document.querySelector('.loading-icon');
+		return {
+			container: document.querySelector('.comment-list, [class*="drawer"], [class*="comment"]') || document.body,
+			items: topLevel,
+			total: parseCommentTotalFromDOM(),
+			buffer: loadingNode ? '__dom_loading__' : '',
+			hasMore: !!loadingNode
+		};
+	}
+
+	function findCommentState(root, depth, seen) {
+		if (!root || typeof root !== 'object') return null;
+		if (depth > 5) return null;
+		if (!seen) seen = [];
+		if (seen.indexOf(root) >= 0) return null;
+		seen.push(root);
+
+		var directCandidates = [
+			root.commentList,
+			root.comments,
+			root.commentData,
+			root.replyList,
+			root.comment,
+			root.feedComment,
+			root.commentPanel
+		];
+		for (var i = 0; i < directCandidates.length; i++) {
+			var candidate = directCandidates[i];
+			if (!candidate || typeof candidate !== 'object') continue;
+			var payload = extractCommentPayload(candidate, true);
+			if (payload && payload.items.length) return payload;
+		}
+
+		var keys = Object.keys(root);
+		for (var j = 0; j < keys.length; j++) {
+			var key = keys[j];
+			var value = root[key];
+			if (!value || typeof value !== 'object') continue;
+			var nestedPayload = extractCommentPayload(value, true);
+			if (nestedPayload && nestedPayload.items.length) return nestedPayload;
+			var deeper = findCommentState(value, depth + 1, seen);
+			if (deeper && deeper.items.length) return deeper;
+		}
+
+		return null;
+	}
+
+	function extractCommentPayload(source, shallowOnly) {
+		if (!source || typeof source !== 'object') return null;
+
+		var listCandidates = [
+			source.dataList,
+			source.list,
+			source.commentList,
+			source.comments,
+			source.replyList,
+			source.commentData,
+			source
+		];
+
+		for (var i = 0; i < listCandidates.length; i++) {
+			var candidate = listCandidates[i];
+			if (!candidate || typeof candidate !== 'object') continue;
+
+			var arrays = [];
+			if (Array.isArray(candidate)) arrays.push(candidate);
+			if (Array.isArray(candidate.items)) arrays.push(candidate.items);
+			if (candidate.dataList && Array.isArray(candidate.dataList.items)) arrays.push(candidate.dataList.items);
+			if (candidate.list && Array.isArray(candidate.list.items)) arrays.push(candidate.list.items);
+			if (candidate.comments && Array.isArray(candidate.comments)) arrays.push(candidate.comments);
+			if (candidate.commentList && Array.isArray(candidate.commentList)) arrays.push(candidate.commentList);
+
+			for (var j = 0; j < arrays.length; j++) {
+				var items = arrays[j];
+				if (!Array.isArray(items) || !items.length) continue;
+				if (!isCommentItem(items[0])) continue;
+				return {
+					container: candidate,
+					items: items,
+					total: candidate.totalCount !== undefined ? candidate.totalCount :
+						(candidate.total !== undefined ? candidate.total :
+						(source.totalCount !== undefined ? source.totalCount :
+						(source.total !== undefined ? source.total :
+						(source.commentCount !== undefined ? source.commentCount : 0)))),
+					buffer: candidate.lastBuffer ||
+						(candidate.nextBuffer || '') ||
+						(candidate.cursor || '') ||
+						(candidate.buffers && (candidate.buffers.lastBuffer || candidate.buffers.nextBuffer)) ||
+						(source.lastBuffer || source.nextBuffer || ''),
+					hasMore: !!(
+						candidate.lastBuffer ||
+						candidate.nextBuffer ||
+						candidate.cursor ||
+						(candidate.buffers && (candidate.buffers.lastBuffer || candidate.buffers.nextBuffer)) ||
+						source.lastBuffer ||
+						source.nextBuffer
+					)
+				};
+			}
+		}
+
+		if (shallowOnly) return null;
+		var nested = findCommentState(source, 0, []);
+		if (nested && nested.items && nested.items.length) return nested;
+		return extractCommentPayloadFromDOM();
 	}
 
 	// 格式化评论数据，使其符合后端 API 要求
@@ -1515,24 +1717,26 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 		function formatItem(item) {
 			// 递归处理子回复
 			var levelTwo = [];
-			if (item.levelTwoComment && Array.isArray(item.levelTwoComment)) {
-				levelTwo = item.levelTwoComment.map(formatItem);
+			var replyList = getReplyList(item);
+			if (replyList && replyList.length) {
+				levelTwo = replyList.map(formatItem);
 			}
 			
 			return {
 				id: item.id || item.commentId,
-				content: item.content,
-				createTime: item.createtime || item.createTime,
-				likeCount: item.likeCount,
-				nickname: item.nickname || (item.author && item.author.nickname),
-				headUrl: item.headUrl || (item.author && item.author.headUrl),
+				content: item.content || item.text || '',
+				createTime: item.createtime || item.createTime || item.create_time || item.time || '',
+				likeCount: item.likeCount || item.like_num || item.diggCount || 0,
+				nickname: item.nickname || (item.author && item.author.nickname) || (item.userInfo && item.userInfo.nickname) || '',
+				headUrl: item.headUrl || (item.author && item.author.headUrl) || (item.userInfo && (item.userInfo.avatar || item.userInfo.headUrl)) || '',
 				ipLocation: item.ipLocation || '',
 				// 新增：回复引用信息 (支持三级回复)
-				replyCommentId: item.replyCommentId || (item.replyComment && item.replyComment.id) || '', 
-				replyNickname: item.replyNickname || (item.replyComment && item.replyComment.nickname) || '',
+				replyCommentId: item.replyCommentId || (item.replyComment && item.replyComment.id) || (item.replyInfo && item.replyInfo.commentId) || '', 
+				replyNickname: item.replyNickname || (item.replyComment && item.replyComment.nickname) || (item.replyInfo && item.replyInfo.nickname) || '',
 				// 递归包含子回复
 				levelTwoComment: levelTwo,
-				expandCommentCount: item.expandCommentCount || 0
+				expandCommentCount: item.expandCommentCount || item.replyCount || item.commentCount || replyList.length || 0,
+				authorLiked: !!item.authorLiked
 			};
 		}
 		
@@ -1542,9 +1746,16 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 	// 获取视频信息
 	function getVideoInfo(store) {
 		var info = { id: '', title: '' };
+		var currentProfile = window.__wx_channels_store__ && window.__wx_channels_store__.profile;
+		
+		// 0. 优先使用当前已同步的视频 profile
+		if (currentProfile) {
+			info.id = currentProfile.id || currentProfile.objectId || '';
+			info.title = currentProfile.title || currentProfile.description || currentProfile.desc || '';
+		}
 		
 		// 1. 尝试从 store.feed 获取 (根据 Log Keys: [ "feed", ... ])
-		if (store && store.feed) {
+		if (!info.id && store && store.feed) {
 			info.id = store.feed.id || store.feed.objectId || store.feed.exportId || '';
 			info.title = store.feed.description || store.feed.desc || '';
 		}
@@ -1567,10 +1778,30 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 			var match = window.location.pathname.match(/\/feed\/([^/?]+)/);
 			if (match) info.id = match[1];
 		}
+
+		if (!info.id) {
+			var activeFeedNode = document.querySelector('[id^="flow-feed-"]');
+			if (activeFeedNode && activeFeedNode.id) {
+				info.id = activeFeedNode.id.replace(/^flow-feed-/, '');
+			}
+		}
 		
 		// 5. 尝试从 document title 获取
 		if (!info.title) {
+			var descNode = document.querySelector('.collapsed-text .ctn, .content .ctn, .compute-node');
+			if (descNode) info.title = descNode.textContent.trim();
+		}
+
+		if (!info.title) {
 			info.title = document.title || '';
+		}
+
+		if (info.title === '视频号') {
+			info.title = '';
+		}
+
+		if (!info.title && currentProfile) {
+			info.title = currentProfile.nickname || '';
 		}
 		
 		return info;
@@ -1624,10 +1855,19 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 		}, delay);
 	}
 
+	function updateProgressHint(loaded, total, phase) {
+		var text = '评论采集中: ' + loaded + (total > 0 ? '/' + total : '') + (phase ? ' | ' + phase : '');
+		if (text === lastProgressText) return;
+		lastProgressText = text;
+		if (typeof __wx_log === 'function') {
+			__wx_log({ msg: '💬 ' + text });
+		}
+	}
+
 	// 尝试调用 Store 的加载更多方法 (增强版: 遍历所有Store查找)
 	function tryTriggerStoreLoadMore(store) {
 		// 常见的加载更多方法名
-		var candidates = ['loadMoreComment', 'fetchComment', 'getCommentHere', 'nextPage', 'loadMore', 'fetchMore', 'loadNext', 'loadMoreData'];
+		var candidates = ['loadMoreComment', 'loadMoreComments', 'fetchComment', 'fetchComments', 'getCommentHere', 'getCommentList', 'nextPage', 'loadMore', 'fetchMore', 'loadNext', 'loadNextPage', 'loadMoreData'];
 		
 		// 1. 如果传入的 explicit store 有效，先尝试它
 		if (store) {
@@ -1706,6 +1946,28 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 
 	// 查找并滚动评论容器
 	function scrollCommentList() {
+		var preferredSelectors = [
+			'.comment-list',
+			'.comment-panel',
+			'.comment-drawer',
+			'[class*="comment-list"]',
+			'[class*="comment-panel"]',
+			'[class*="comment-drawer"]',
+			'[class*="reply-list"]'
+		];
+
+		for (var p = 0; p < preferredSelectors.length; p++) {
+			var preferredNodes = document.querySelectorAll(preferredSelectors[p]);
+			for (var q = 0; q < preferredNodes.length; q++) {
+				var preferred = preferredNodes[q];
+				if (!preferred || preferred.offsetParent === null) continue;
+				if (preferred.scrollHeight > preferred.clientHeight + 20) {
+					preferred.scrollTop = preferred.scrollHeight;
+					return true;
+				}
+			}
+		}
+
 		// 1. 尝试找到包含评论的滚动容器
 		var walkers = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, {
 			acceptNode: function(node) {
@@ -1729,18 +1991,18 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 		for (var i = scrollableContainers.length - 1; i >= 0; i--) {
 			var container = scrollableContainers[i];
 			// 简单的判断：容器高度大于一定值，且包含一些文本
-			if (container.scrollHeight > 300 && container.innerText.length > 50) {
+			var text = container.innerText || '';
+			var className = container.className || '';
+			var looksLikeCommentPanel = className.indexOf('comment') >= 0 || className.indexOf('reply') >= 0 || text.indexOf('回复') >= 0;
+			if (container.scrollHeight > 300 && text.length > 50 && looksLikeCommentPanel) {
 				// 滚动它
 				// console.log('[评论采集] 📜 滚动容器:', container.className || container.tagName);
 				container.scrollTop = container.scrollHeight;
-				found = true;
-				// 不break，可能由多个嵌套容器需要滚动，或者我们不确定是哪一个，都滚一下
+				return true;
 			}
 		}
 		
-		if (!found) {
-			window.scrollTo(0, document.body.scrollHeight);
-		}
+		return found;
 	}
 
 	// 主逻辑：订阅 Store 变化
@@ -1760,24 +2022,21 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 		
 		// 订阅变化
 		store.$subscribe(function(mutation, state) {
-			if (state.commentList && state.commentList.dataList) {
-				var items = state.commentList.dataList.items;
+			var payload = extractCommentPayload(state, false) || extractCommentPayload(store, false);
+			if (payload && payload.items && payload.items.length) {
+				var items = payload.items;
 				
-				// 尝试多处获取总数
-				var total = 0;
-				// 注意：在subscribe回调中，state可能会只有部分变动，所以尽量去读 store (proxy) 或者做好空值判断
-				// 但 state.commentList 应该是完整的
-				if (state.commentList.totalCount !== undefined) total = state.commentList.totalCount;
-				else if (state.commentList.total !== undefined) total = state.commentList.total;
-				// 回退到 store 实例获取 (state 可能不包含 feed)
-				else if (store.feed && store.feed.commentCount !== undefined) total = store.feed.commentCount;
+				var total = payload.total || 0;
+				if (!total && store.feed && store.feed.commentCount !== undefined) total = store.feed.commentCount;
 				
 				// 只要数量变化，就触发（防抖）保存
-				if (items.length !== lastCommentCount) {
+				var currentLoadedCount = getCommentStats(items).total;
+				if (currentLoadedCount !== lastCommentCount) {
 					var stats = getCommentStats(items);
 					console.log('[评论采集] 评论更新: ' + stats.total + ' (总数: ' + total + ')');
-					lastCommentCount = items.length;
+					lastCommentCount = currentLoadedCount;
 					noChangeCount = 0;
+					updateProgressHint(stats.total, total, '已加载');
 					
 					var formatted = formatComments(items);
 					triggerSave(formatted, total);
@@ -2000,73 +2259,110 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 	// 暴露手动启动函数 (供按钮调用)
 	window.__wx_channels_start_comment_collection = function() {
 		console.log('[评论采集] 初始化采集...');
+		lastProgressText = '';
 		
 		var store = findFeedStore();
+		var domPayload = extractCommentPayloadFromDOM();
 		if (!store) {
-			console.warn('[评论采集] 未找到Store');
-			initObserver();
-			return;
+			if (domPayload && domPayload.items && domPayload.items.length) {
+				console.warn('[评论采集] 未找到Store，切换到DOM采集模式');
+				store = null;
+			} else {
+				console.warn('[评论采集] 未找到Store');
+				setTimeout(initObserver, 400);
+				return;
+			}
 		}
 		
 		// 强制触发一次加载更多
-		tryTriggerStoreLoadMore(store);
+		if (store) {
+			tryTriggerStoreLoadMore(store);
+		}
 		
-		if (store.commentList && store.commentList.dataList) {
-			var items = store.commentList.dataList.items;
+		var payload = domPayload || (store && extractCommentPayload(store, false));
+		if (!payload || !payload.items || !payload.items.length) {
+			console.warn('[评论采集] 评论数据暂未就绪，等待评论区初始化...');
+			var waitCount = 0;
+			var waitTimer = setInterval(function() {
+				waitCount++;
+				var nextStore = findFeedStore() || store;
+				if (nextStore) {
+					tryTriggerStoreLoadMore(nextStore);
+				}
+				var nextDomPayload = extractCommentPayloadFromDOM();
+				var nextPayload = nextDomPayload || (nextStore && extractCommentPayload(nextStore, false));
+				if (nextPayload && nextPayload.items && nextPayload.items.length) {
+					clearInterval(waitTimer);
+					window.__wx_channels_start_comment_collection();
+					return;
+				}
+				if (waitCount >= 20) {
+					clearInterval(waitTimer);
+					alert('未检测到评论数据，请先打开评论区后重试');
+				}
+			}, 300);
+			return;
+		}
+
+		if (payload && payload.items && payload.items.length) {
+			var items = payload.items;
 			
 			// 尝试多处获取总数
-			var total = 0;
-			if (store.commentList.totalCount !== undefined) total = store.commentList.totalCount;
-			else if (store.commentList.total !== undefined) total = store.commentList.total;
-			else if (store.feed && store.feed.commentCount !== undefined) total = store.feed.commentCount;
-			else if (store.profile && store.profile.commentCount !== undefined) total = store.profile.commentCount;
+			var total = payload.total || 0;
+			if (!total && store.feed && store.feed.commentCount !== undefined) total = store.feed.commentCount;
+			else if (!total && store.profile && store.profile.commentCount !== undefined) total = store.profile.commentCount;
 			
 			var stats = getCommentStats(items);
 			
 			// 获取分页标记
-			var lastBuffer = '';
-			if (store.commentList.lastBuffer) {
-				lastBuffer = store.commentList.lastBuffer;
-			} else if (store.commentList.dataList && store.commentList.dataList.buffers && store.commentList.dataList.buffers.lastBuffer) {
-				// 命中！根据日志分析，这是正确路径
-				lastBuffer = store.commentList.dataList.buffers.lastBuffer;
-			}
+			var lastBuffer = payload.buffer || '';
 			
 			var hasMore = !!lastBuffer;
 			console.log('[评论采集] 采集概况: 已加载' + stats.total + '/' + total + ' (一级:' + stats.topLevel + ', 二级:' + stats.replies + ') | hasMore:' + hasMore);
+			updateProgressHint(stats.total, total, hasMore ? '准备继续加载' : '已全部加载');
 			
 			var formatted = formatComments(items);
 			// 只有在没有更多或者用户取消采集时才保存
 			// saveComments(formatted, total); 
 			
 			if (hasMore || stats.total < total) {
-			    // 如果还有更多，询问是否继续加载
-			    if (confirm('已发现 ' + stats.total + ' 条评论 (目标: ' + total + ')。\n检测到还有更多内容，是否自动采集全部？\n(包含自动点击"展开回复")')) {
+			    // 如果还有更多，默认继续自动采集，避免嵌入式页面的 confirm 阻塞流程
+				updateProgressHint(stats.total, total, '开始自动采集');
+				if (typeof __wx_log === 'function') {
+					__wx_log({ msg: '💬 已发现 ' + stats.total + '/' + total + ' 条评论，开始自动继续采集...' });
+				}
 			        var sameCountRetries = 0;
 			        var loadLoop = setInterval(function() {
+			        	var currentDomPayload = extractCommentPayloadFromDOM();
+			        	var currentPayload = currentDomPayload || (store && extractCommentPayload(store, false));
+			        	if (!currentPayload || !currentPayload.items) {
+			        		console.warn('[评论采集] 当前评论数据容器未找到，继续重试...');
+			        		if (store) {
+			        			tryTriggerStoreLoadMore(store);
+			        		}
+			        		scrollCommentList();
+			        		return;
+			        	}
 			            // 更新 buffer 获取逻辑
-			            var currentBuffer = '';
-			            if (store.commentList.lastBuffer) currentBuffer = store.commentList.lastBuffer;
-			            else if (store.commentList.dataList && store.commentList.dataList.buffers && store.commentList.dataList.buffers.lastBuffer) {
-			                currentBuffer = store.commentList.dataList.buffers.lastBuffer;
-			            }
-			            
-			            var currentStats = getCommentStats(store.commentList.dataList.items);
+			            var currentStats = getCommentStats(currentPayload.items);
 			            
 			            // 终止条件1: 已加载数达到或超过总数 (无论是否有 Buffer)
 			            if (currentStats.total >= total) {
 			                console.log('[评论采集] 数量已达标，采集完成');
+			                updateProgressHint(currentStats.total, total, '采集完成');
 			                clearInterval(loadLoop);
 							
 							// 强制保存最终结果
-							var finalItems = store.commentList.dataList.items;
+							var finalItems = currentPayload.items;
 							var finalFormatted = formatComments(finalItems);
 							saveComments(finalFormatted, total);
 
 							// 输出详细的二级回复报告
 							verifyCommentAllExpanded(finalItems);
 
-			                alert('采集完成！\n总计: ' + currentStats.total + '\n一级: ' + currentStats.topLevel + '\n二级: ' + currentStats.replies);
+							if (typeof __wx_log === 'function') {
+								__wx_log({ msg: '✅ 评论采集完成：' + currentStats.total + '/' + total });
+							}
 			                return;
 			            }
 			            
@@ -2079,9 +2375,10 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 
 			                if (sameCountRetries > 10) {
 			                    clearInterval(loadLoop);
+								updateProgressHint(currentStats.total, total, '重试结束，保存当前结果');
 								
 								// 强制保存最终结果 (即使是不完整的)
-								var finalItems = store.commentList.dataList.items;
+								var finalItems = currentPayload.items;
 								var finalFormatted = formatComments(finalItems);
 								saveComments(finalFormatted, total);
 
@@ -2095,13 +2392,15 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 									msg += '\n⚠️ 仍有约 ' + currentStats.missingReplies + ' 条二级回复可能未展开。';
 								}
 								msg += '\n(已尝试自动保存当前数据)';
-								
-			                    alert(msg);
+								if (typeof __wx_log === 'function') {
+									__wx_log({ msg: '⚠️ ' + msg.replace(/\n/g, ' | ') });
+								}
 			                    return;
 			                }
 			            } else {
 			                stats = currentStats; // 更新基准
 			                sameCountRetries = 0; // 重置计数
+							updateProgressHint(currentStats.total, total, '继续加载中');
 							
 							// 策略调整：优先处理二级评论展开，必须等所有展开点完再滚动
 							// 这样可以防止滚动过快导致"查看更多"按钮消失或未被点击
@@ -2115,22 +2414,20 @@ func (h *ScriptHandler) getCommentCaptureScript() string {
 			            console.log('[评论采集] 采集中... ' + currentStats.total + '/' + total);
 			            
 			            // 触发加载 (API + 滚动)
-			            tryTriggerStoreLoadMore(store);
-			            scrollCommentList();
+			            if (store) {
+			            	tryTriggerStoreLoadMore(store);
+			            }
+			            if (!scrollCommentList()) {
+			            	updateProgressHint(currentStats.total, total, '等待评论侧栏继续加载');
+			            }
 						
 			        }, 1500 + Math.random() * 1000); // 1.5-2.5秒间隔
-			    } else {
-					// 用户选择不继续，保存当前数据
-					saveComments(formatted, total);
-					alert('已保存当前采集的 ' + stats.total + ' 条评论。');
-				}
 			} else {
 				saveComments(formatted, total);
-			    alert('正在保存评论...\n已加载: ' + stats.total + '\n总数: ' + total + '\n(已全部加载完成)');
+				if (typeof __wx_log === 'function') {
+					__wx_log({ msg: '✅ 评论已保存：' + stats.total + '/' + total });
+				}
 			}
-		} else {
-			console.warn('[评论采集] Store中没有评论数据');
-			alert('未检测到评论数据，请确保已打开评论区');
 		}
 	};
 

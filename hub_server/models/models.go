@@ -22,13 +22,26 @@ type User struct {
 
 // Node 客户端节点模型
 type Node struct {
-	ID       string    `json:"id" gorm:"primaryKey"`
-	Hostname string    `json:"hostname"`
-	Version  string    `json:"version"`
-	IP       string    `json:"ip"`
-	Port     int       `json:"port" gorm:"default:2025"` // 客户端 API 端口
-	Status   string    `json:"status"` // online, offline
-	LastSeen time.Time `json:"last_seen"`
+	ID                  string          `json:"id" gorm:"primaryKey"`
+	Hostname            string          `json:"hostname"`
+	Version             string          `json:"version"`
+	IP                  string          `json:"ip"`
+	Port                int             `json:"port" gorm:"default:2025"` // 客户端 API 端口
+	Status              string          `json:"status"`                   // online, offline
+	LastSeen            time.Time       `json:"last_seen"`
+	PagePath            string          `json:"page_path" gorm:"default:''"`
+	Href                string          `json:"href" gorm:"type:text;default:''"`
+	APIReady            bool            `json:"api_ready" gorm:"default:false"`
+	WSClients           int             `json:"ws_clients" gorm:"default:0"`
+	ReadyClients        int             `json:"ready_clients" gorm:"default:0"`
+	SearchReadyClients  int             `json:"search_ready_clients" gorm:"default:0"`
+	FeedReadyClients    int             `json:"feed_ready_clients" gorm:"default:0"`
+	ProfileReadyClients int             `json:"profile_ready_clients" gorm:"default:0"`
+	SupportsSearch      bool            `json:"supports_search" gorm:"default:false"`
+	SupportsFeed        bool            `json:"supports_feed" gorm:"default:false"`
+	SupportsProfile     bool            `json:"supports_profile" gorm:"default:false"`
+	MethodsJSON         string          `json:"-" gorm:"type:text;default:''"`
+	Methods             map[string]bool `json:"methods,omitempty" gorm:"-"`
 
 	// Binding Info
 	UserID     uint `json:"user_id" gorm:"index"`

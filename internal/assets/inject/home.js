@@ -1,5 +1,5 @@
 /**
- * @file Home页面功能模块 - 下载按钮注入和幻灯片监听
+ * @file Home页面功能模块 - 适配新版顶部四栏导航
  */
 console.log('[home.js] 加载Home页面模块');
 
@@ -8,23 +8,35 @@ var __last_slide_index__ = -1;
 var __home_slide_observer__ = null;
 var __home_first_load__ = true;
 var __current_tab__ = 'unknown';
-var __current_tab_type__ = 'unknown'; // video-player, video-list, live-list
-var __category_feeds_cache__ = {}; // 缓存各分类的完整视频数据
+var __current_tab_type__ = 'unknown'; // video-player, live-list, unsupported
 
-// ==================== 分类视频列表弹窗 ====================
-// 使用通用批量下载组件
-function __show_category_video_list__() {
-  var currentTabName = __get_tab_display_name(__current_tab__);
-  var feeds = __category_feeds_cache__[currentTabName];
-
-  if (!feeds || feeds.length === 0) {
-    __wx_log({ msg: '❌ 当前分类暂无视频数据' });
-    return;
+var __home_tab_meta__ = {
+  recommend: {
+    displayName: '推荐',
+    type: 'video-player',
+    description: '可下载当前推荐视频'
+  },
+  follow: {
+    displayName: '关注',
+    type: 'video-player',
+    description: '可下载当前关注视频'
+  },
+  friend: {
+    displayName: '朋友',
+    type: 'video-player',
+    description: '可下载当前朋友视频'
+  },
+  live: {
+    displayName: '直播',
+    type: 'live-list',
+    description: '直播列表暂不支持下载'
+  },
+  unknown: {
+    displayName: '未知',
+    type: 'unsupported',
+    description: '当前区域暂不支持下载'
   }
-
-  // 调用通用批量下载UI
-  __show_batch_download_ui__(feeds, currentTabName + ' - 视频列表');
-}
+};
 
 // ==================== Tab检测 ====================
 function __detect_current_tab() {
@@ -39,14 +51,11 @@ function __detect_current_tab() {
       var text = tab.textContent.trim();
       console.log('[home.js] 找到选中的tab:', text);
 
-      if (text === '首页') return 'home';
       if (text === '推荐') return 'recommend';
       if (text === '关注') return 'follow';
       if (text === '朋友') return 'friend';
       if (text === '直播') return 'live';
-
-      // 其他分类tab
-      return 'category_' + text;
+      return 'unknown';
     }
   }
 
@@ -55,32 +64,18 @@ function __detect_current_tab() {
 }
 
 function __get_tab_type(tab) {
-  // 推荐、关注、朋友 = 视频播放页（可上下滑动切换）
-  if (tab === 'recommend' || tab === 'follow' || tab === 'friend') {
-    return 'video-player';
-  }
-  // 直播 = 直播列表
-  if (tab === 'live') {
-    return 'live-list';
-  }
-  // 首页和其他分类 = 视频列表
-  return 'video-list';
+  var meta = __home_tab_meta__[tab] || __home_tab_meta__.unknown;
+  return meta.type;
 }
 
 function __get_tab_display_name(tab) {
-  if (tab.startsWith('category_')) {
-    return tab.replace('category_', '');
-  }
+  var meta = __home_tab_meta__[tab] || __home_tab_meta__.unknown;
+  return meta.displayName;
+}
 
-  var tabNames = {
-    'home': '首页',
-    'recommend': '推荐',
-    'follow': '关注',
-    'friend': '朋友',
-    'live': '直播',
-    'unknown': '未知'
-  };
-  return tabNames[tab] || tab;
+function __get_tab_description(tab) {
+  var meta = __home_tab_meta__[tab] || __home_tab_meta__.unknown;
+  return meta.description;
 }
 
 function __update_tab_display() {
@@ -93,217 +88,509 @@ function __update_tab_display() {
 
     var displayName = __get_tab_display_name(newTab);
     var typeDesc = newTabType === 'video-player' ? '视频播放' :
-      newTabType === 'live-list' ? '直播列表' : '视频列表';
+      newTabType === 'live-list' ? '直播列表' : '暂不支持区域';
 
     console.log('[home.js] 当前tab切换为:', displayName, '类型:', typeDesc);
 
     // 根据tab类型更新下载按钮状态
     __update_download_button_state();
+
+    if (displayName !== '未知') {
+      __wx_log({ msg: '📍 当前模块: ' + displayName + ' - ' + __get_tab_description(newTab) });
+    }
   }
 }
 
 function __try_collect_page_data() {
-  // 分类视频列表的数据通过API拦截获取，不需要从DOM采集
-  // 数据会通过 CategoryFeedsLoaded 事件传递
+  // 新版顶部四栏不再维护旧分类缓存，这里保留空函数以兼容旧调用点
+}
+
+function __get_home_download_buttons__() {
+  var btn = document.getElementById('wx-home-download-icon');
+  return btn ? [btn] : [];
 }
 
 function __update_download_button_state() {
-  var downloadBtn = document.getElementById('wx-home-download-icon');
-  if (!downloadBtn) return;
+  var buttons = __get_home_download_buttons__();
+  if (buttons.length === 0) return;
 
-  // 视频播放页和视频列表页都启用下载按钮
-  if (__current_tab_type__ === 'video-player' || __current_tab_type__ === 'video-list') {
-    downloadBtn.style.opacity = '1';
-    downloadBtn.style.cursor = 'pointer';
-    downloadBtn.style.pointerEvents = 'auto';
+  for (var i = 0; i < buttons.length; i++) {
+    var downloadBtn = buttons[i];
+    var icon = downloadBtn.querySelector('.wx-home-download-icon');
+    var label = downloadBtn.querySelector('.wx-home-download-label');
 
     if (__current_tab_type__ === 'video-player') {
-      downloadBtn.title = '下载视频';
+      downloadBtn.style.opacity = '1';
+      downloadBtn.style.cursor = 'pointer';
+      downloadBtn.style.pointerEvents = 'auto';
+      if (icon) icon.style.color = 'rgba(255,255,255,0.94)';
+      if (label) label.style.color = 'rgba(255,255,255,0.92)';
+      downloadBtn.title = __get_tab_description(__current_tab__);
     } else {
-      downloadBtn.title = '批量下载视频列表';
-    }
-  } else {
-    downloadBtn.style.opacity = '0.3';
-    downloadBtn.style.cursor = 'not-allowed';
-    downloadBtn.style.pointerEvents = 'none';
+      downloadBtn.style.opacity = '0.55';
+      downloadBtn.style.cursor = 'not-allowed';
+      downloadBtn.style.pointerEvents = 'none';
+      if (icon) icon.style.color = 'rgba(255,255,255,0.42)';
+      if (label) label.style.color = 'rgba(255,255,255,0.36)';
 
-    if (__current_tab_type__ === 'live-list') {
-      downloadBtn.title = '直播列表页暂不支持下载';
-    } else {
-      downloadBtn.title = '当前页面不支持下载';
+      if (__current_tab_type__ === 'live-list') {
+        downloadBtn.title = '直播模块暂不支持下载';
+      } else {
+        downloadBtn.title = '当前页面不支持下载';
+      }
     }
   }
 }
 
-// ==================== 下载按钮注入 ====================
-async function __insert_download_btn_to_home_page() {
-  console.log('[home.js] 开始注入下载按钮到顶部工具栏...');
+function __handle_home_download_click() {
+  if (__current_tab_type__ !== 'video-player') {
+    __wx_log({ msg: '当前模块暂不支持下载' });
+    return;
+  }
 
-  // 查找顶部工具栏容器
-  var findToolbarContainer = function () {
-    // 尝试多种选择器
-    var container = document.querySelector('div[data-v-bf57a568].flex.items-center');
-    if (container) return container;
-
-    var parent = document.querySelector('div.flex-initial.flex-shrink-0.pl-6');
-    if (parent) {
-      container = parent.querySelector('.flex.items-center');
-      if (container) return container;
+  __resolve_current_home_profile(5, 260).then(function (profile) {
+    if (!profile) {
+      __wx_log({ msg: '❌ 获取当前视频数据失败\n请等待视频完全加载后重试' });
+      return;
     }
 
-    // 尝试查找包含相机图标的容器
-    var cameraIcon = document.querySelector('svg[data-v-bf57a568]');
-    if (cameraIcon) {
-      var current = cameraIcon;
-      while (current && current.parentElement) {
-        current = current.parentElement;
-        if (current.classList && current.classList.contains('flex') && current.classList.contains('items-center')) {
-          return current;
-        }
-      }
-    }
-
-    return null;
-  };
-
-  var tryInject = function () {
-    var container = findToolbarContainer();
-    if (!container) return false;
-
-    // 检查是否已存在
-    if (container.querySelector('#wx-home-download-icon')) {
-      console.log('[home.js] 工具栏下载按钮已存在');
-      return true;
-    }
-
-    // 创建下载图标
-    var downloadIconWrapper = document.createElement('div');
-    downloadIconWrapper.id = 'wx-home-download-icon';
-    downloadIconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
-    downloadIconWrapper.title = '下载视频';
-    downloadIconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg>';
-
-    downloadIconWrapper.onclick = function () {
-      // 检查当前tab类型
-      if (__current_tab_type__ === 'video-player') {
-        // 视频播放页：显示单个视频的下载选项
-        var checkCount = 0;
-        var maxChecks = 30;
-
-        var checkData = function () {
-          if (window.__wx_channels_store__ && window.__wx_channels_store__.profile) {
-            __show_home_download_options(window.__wx_channels_store__.profile);
-          } else {
-            checkCount++;
-            if (checkCount < maxChecks) {
-              setTimeout(checkData, 100);
-              if (checkCount === 1) {
-                __wx_log({ msg: '⏳ 正在获取视频数据，请稍候...' });
-              }
-            } else {
-              __wx_log({ msg: '❌ 获取视频数据超时\n请重新滑动视频或刷新页面' });
-            }
-          }
-        };
-
-        checkData();
-      } else if (__current_tab_type__ === 'video-list') {
-        // 视频列表页：显示批量下载弹窗
-        __show_category_video_list__();
-      } else {
-        // 其他页面
-        var tabName = __get_tab_display_name(__current_tab__);
-        var message = '当前在 "' + tabName + '" 页面';
-        if (__current_tab_type__ === 'live-list') {
-          message += '，这是直播列表页，暂不支持下载';
-        } else {
-          message += '，暂不支持下载';
-        }
-        __wx_log({ msg: '⚠️ ' + message });
-      }
-    };
-
-    // 插入到容器最前面
-    container.insertBefore(downloadIconWrapper, container.firstChild);
-
-    console.log('[home.js] ✅ 工具栏下载按钮注入成功');
-    __wx_log({ msg: "注入下载按钮成功!" });
-
-    // 检测并显示当前tab
-    setTimeout(function () {
-      __update_tab_display();
-    }, 500);
-
-    return true;
-  };
-
-  // 立即尝试注入
-  if (tryInject()) return true;
-
-  // 如果失败，使用 MutationObserver 监听 DOM 变化
-  return new Promise(function (resolve) {
-    var observer = new MutationObserver(function (_mutations, obs) {
-      if (tryInject()) {
-        obs.disconnect();
-        resolve(true);
-      }
-    });
-
-    observer.observe(document.body, {
-      childList: true,
-      subtree: true
-    });
-
-    // 5秒后超时
-    setTimeout(function () {
-      observer.disconnect();
-      console.log('[home.js] 工具栏按钮注入超时');
-      resolve(false);
-    }, 5000);
+    __show_home_download_options(profile);
   });
+}
+
+// ==================== 下载按钮注入 ====================
+async function __ensure_home_download_button(forceReinject) {
+  if (!window.location.pathname.includes('/pages/home')) return false;
+
+  var existing = document.getElementById('wx-home-download-icon');
+  if (existing && !forceReinject) {
+    __position_home_download_button(existing);
+    __update_download_button_state();
+    return true;
+  }
+
+  if (existing) existing.remove();
+
+  var button = document.createElement('div');
+  button.id = 'wx-home-download-icon';
+  button.title = '下载视频';
+  button.style.cssText = [
+    'position:fixed',
+    'z-index:99997',
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'width:20px',
+    'height:20px',
+    'color:rgba(255,255,255,0.5)',
+    'cursor:pointer',
+    'transition:color 0.2s, opacity 0.2s, transform 0.2s',
+    'user-select:none'
+  ].join(';');
+  button.innerHTML = '<svg class="h-full w-full wx-home-download-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg>';
+  button.onclick = function (event) {
+    event.preventDefault();
+    event.stopPropagation();
+    __handle_home_download_click();
+  };
+  button.onmouseenter = function () {
+    if (__current_tab_type__ === 'video-player') {
+      button.style.color = 'rgba(255,255,255,0.84)';
+    }
+  };
+  button.onmouseleave = function () {
+    __update_download_button_state();
+  };
+
+  document.body.appendChild(button);
+  __position_home_download_button(button);
+  __update_download_button_state();
+  return true;
+}
+
+function __schedule_home_download_button_refresh() {
+  setTimeout(function () { __ensure_home_download_button(true); }, 120);
+  setTimeout(function () { __ensure_home_download_button(true); }, 480);
+  setTimeout(function () { __ensure_home_download_button(true); }, 1200);
+}
+
+async function __insert_download_btn_to_home_page() {
+  __update_tab_display();
+  return __ensure_home_download_button(false);
 }
 
 // ==================== 幻灯片切换监听 ====================
 // Home页面改为顶部工具栏按钮后，不再需要监听幻灯片切换来重新注入按钮
 // 保留此函数以防需要监听其他事件
 function __start_home_slide_monitor() {
-  console.log("[home.js] Home页面使用顶部工具栏按钮，无需监听幻灯片切换");
+  if (window.__wx_home_slide_timer__) return;
+
+  window.__wx_home_slide_timer__ = setInterval(function () {
+    if (!window.location.pathname.includes('/pages/home')) return;
+
+    __update_tab_display();
+    __ensure_home_download_button(false);
+
+    if (__current_tab_type__ === 'video-player') {
+      __sync_home_profile_with_runtime(false);
+    }
+  }, 1500);
 }
 
 // ==================== Tab切换监听 ====================
 function __start_tab_monitor() {
-  console.log('[home.js] 启动tab切换监听器');
+  if (window.__wx_home_tab_monitor_started__) return;
+  window.__wx_home_tab_monitor_started__ = true;
 
-  // 初始检测
-  setTimeout(function () {
-    __update_tab_display();
-  }, 1000);
+  document.addEventListener('click', function (event) {
+    var target = event.target;
+    if (!target) return;
+    var tab = target.closest ? target.closest('[role="tab"]') : null;
+    if (!tab) return;
 
-  // 监听点击事件 - 只监听tab元素的点击
-  document.addEventListener('click', function (e) {
-    var target = e.target;
+    setTimeout(function () {
+      __update_tab_display();
+      __schedule_home_download_button_refresh();
+      __sync_home_profile_with_runtime(true);
+    }, 80);
+  }, true);
 
-    // 检查是否点击了tab元素
-    var isTabClick = false;
-    var current = target;
-    for (var i = 0; i < 5; i++) {
-      if (!current) break;
-      if (current.getAttribute && current.getAttribute('role') === 'tab') {
-        isTabClick = true;
-        break;
-      }
-      current = current.parentElement;
-    }
-
-    // 只有点击tab时才检测
-    if (isTabClick) {
-      setTimeout(function () {
-        __update_tab_display();
-      }, 500);
-    }
+  window.addEventListener('resize', function () {
+    __ensure_home_download_button(false);
   });
+}
 
-  console.log('[home.js] ✅ Tab监听器已启动');
+function __position_home_download_button(button) {
+  if (!button) return;
+
+  var searchIcon = document.querySelector('.home-header .search-bar .h-5.w-5') ||
+    document.querySelector('.home-header .search-bar [class*="h-5"][class*="w-5"]') ||
+    document.querySelector('.home-header .search-bar');
+  var userIcon = document.querySelector('.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .h-5.w-5') ||
+    document.querySelector('.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 [class*="h-5"][class*="w-5"]');
+
+  if (!searchIcon) {
+    button.style.top = '16px';
+    button.style.right = '64px';
+    return;
+  }
+
+  var searchRect = searchIcon.getBoundingClientRect();
+  var left = searchRect.left - 28;
+
+  if (userIcon) {
+    var userRect = userIcon.getBoundingClientRect();
+    var rightLimit = userRect.left - 24;
+    if (left > rightLimit) {
+      left = searchRect.left - 26;
+    }
+  }
+
+  button.style.left = Math.max(16, left) + 'px';
+  button.style.top = Math.max(8, searchRect.top) + 'px';
+}
+
+function __get_active_home_feed_element() {
+  var feedNodes = document.querySelectorAll('[id^="flow-feed-"]');
+  if (!feedNodes || feedNodes.length === 0) return null;
+
+  var viewportTop = 0;
+  var viewportBottom = window.innerHeight || document.documentElement.clientHeight || 0;
+  var bestNode = null;
+  var bestScore = -1;
+
+  for (var i = 0; i < feedNodes.length; i++) {
+    var node = feedNodes[i];
+    if (!node || !node.getBoundingClientRect) continue;
+    var rect = node.getBoundingClientRect();
+    var visibleHeight = Math.min(rect.bottom, viewportBottom) - Math.max(rect.top, viewportTop);
+    var visibleWidth = Math.min(rect.right, window.innerWidth || document.documentElement.clientWidth || 0) - Math.max(rect.left, 0);
+    var score = Math.max(0, visibleHeight) * Math.max(0, visibleWidth);
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestNode = node;
+    }
+  }
+
+  return bestNode;
+}
+
+function __get_active_home_feed_id() {
+  var node = __get_active_home_feed_element();
+  if (!node || !node.id) return '';
+  return node.id.replace(/^flow-feed-/, '');
+}
+
+function __is_feed_candidate(obj) {
+  return !!(obj &&
+    typeof obj === 'object' &&
+    obj.objectDesc &&
+    obj.objectDesc.media &&
+    obj.objectDesc.media[0] &&
+    (obj.objectDesc.mediaType === 4 || obj.objectDesc.mediaType === 2));
+}
+
+function __is_candidate_match_active_feed(candidate, activeFeedId) {
+  if (!candidate) return false;
+  if (!activeFeedId) return true;
+
+  var candidateId = candidate.id || candidate.objectId || candidate.objectNonceId || '';
+  return String(candidateId) === String(activeFeedId);
+}
+
+function __search_feed_candidate(root, activeFeedId, maxDepth, maxKeys) {
+  var visited = [];
+
+  function seen(obj) {
+    for (var i = 0; i < visited.length; i++) {
+      if (visited[i] === obj) return true;
+    }
+    visited.push(obj);
+    return false;
+  }
+
+  function walk(obj, depth) {
+    if (!obj || typeof obj !== 'object') return null;
+    if (seen(obj)) return null;
+    if (__is_feed_candidate(obj) && __is_candidate_match_active_feed(obj, activeFeedId)) {
+      return obj;
+    }
+    if (depth >= maxDepth) return null;
+
+    if (Array.isArray(obj)) {
+      for (var ai = 0; ai < obj.length && ai < maxKeys; ai++) {
+        var arrayMatch = walk(obj[ai], depth + 1);
+        if (arrayMatch) return arrayMatch;
+      }
+      return null;
+    }
+
+    var keys = [];
+    try {
+      keys = Object.keys(obj);
+    } catch (e) {
+      return null;
+    }
+
+    for (var i = 0; i < keys.length && i < maxKeys; i++) {
+      var key = keys[i];
+      if (key === 'parent' || key === 'appContext' || key === 'provides' || key === 'deps') continue;
+
+      var value = null;
+      try {
+        value = obj[key];
+      } catch (e) {
+        continue;
+      }
+
+      if (!value || (typeof value !== 'object' && !Array.isArray(value))) continue;
+
+      var nestedMatch = walk(value, depth + 1);
+      if (nestedMatch) return nestedMatch;
+    }
+
+    return null;
+  }
+
+  return walk(root, 0);
+}
+
+function __get_home_runtime_roots() {
+  var roots = [];
+  var activeFeedNode = __get_active_home_feed_element();
+  var app = document.getElementById('app') || document.querySelector('[data-v-app]');
+
+  function push(root) {
+    if (root) roots.push(root);
+  }
+
+  push(activeFeedNode);
+  push(activeFeedNode && activeFeedNode.__vueParentComponent);
+  push(activeFeedNode && activeFeedNode.__vnode);
+  push(activeFeedNode && activeFeedNode._vnode);
+
+  if (app) {
+    push(app.__vue_app__);
+    push(app.__vueParentComponent);
+    push(app.__vnode);
+    push(app._vnode);
+  }
+
+  try {
+    var appInstance = app && (app.__vue_app__ || (app.__vueParentComponent && app.__vueParentComponent.appContext && app.__vueParentComponent.appContext.app));
+    var appContext = appInstance && (appInstance._context || appInstance.context);
+    var globalProperties = appContext && appContext.config && appContext.config.globalProperties;
+    var pinia = globalProperties && globalProperties.$pinia;
+
+    push(appContext);
+    push(globalProperties);
+    push(pinia);
+
+    if (pinia && pinia._s && typeof pinia._s.forEach === 'function') {
+      pinia._s.forEach(function (store) {
+        push(store);
+        push(store.$state);
+      });
+    }
+  } catch (e) {
+    console.warn('[home.js] 获取 Pinia roots 失败:', e);
+  }
+
+  return roots;
+}
+
+function __extract_profile_from_dom_fallback(activeFeedId) {
+  var feedNode = __get_active_home_feed_element();
+  if (!feedNode) return null;
+
+  var descriptionNode = feedNode.querySelector('.content .ctn, .collapsed-text .ctn, .compute-node');
+  var authorNode = feedNode.querySelector('.mx-auto .text-sm.font-medium.text-white, .min-w-0.flex-shrink.cursor-pointer.overflow-hidden.text-ellipsis.whitespace-nowrap.text-sm.font-medium.text-white');
+  var avatarNode = feedNode.querySelector('img.rounded-full');
+  var posterNode = feedNode.querySelector('.vjs-poster');
+  var mediaNode = feedNode.querySelector('.feed-video video, video');
+  var counts = feedNode.querySelectorAll('.op-item .op-text');
+
+  var thumbUrl = '';
+  if (posterNode && posterNode.style && posterNode.style.backgroundImage) {
+    var matched = posterNode.style.backgroundImage.match(/url\(["']?(.*?)["']?\)/);
+    if (matched && matched[1]) thumbUrl = matched[1];
+  }
+
+  return {
+    id: activeFeedId || (feedNode.id || '').replace(/^flow-feed-/, ''),
+    type: 'media',
+    title: descriptionNode ? descriptionNode.textContent.trim() : '',
+    nickname: authorNode ? authorNode.textContent.trim() : '',
+    contact: {
+      nickname: authorNode ? authorNode.textContent.trim() : '',
+      avatar_url: avatarNode ? avatarNode.src : ''
+    },
+    thumbUrl: thumbUrl,
+    coverUrl: thumbUrl,
+    url: mediaNode ? mediaNode.currentSrc || mediaNode.src || '' : '',
+    spec: [],
+    likeCount: counts[0] ? parseInt(counts[0].textContent.replace(/[^\d]/g, ''), 10) || 0 : 0,
+    forwardCount: counts[1] ? parseInt(counts[1].textContent.replace(/[^\d]/g, ''), 10) || 0 : 0,
+    favCount: counts[2] ? parseInt(counts[2].textContent.replace(/[^\d]/g, ''), 10) || 0 : 0,
+    commentCount: counts[3] ? parseInt(counts[3].textContent.replace(/[^\d]/g, ''), 10) || 0 : 0
+  };
+}
+
+function __locate_current_home_feed() {
+  var activeFeedId = __get_active_home_feed_id();
+  var roots = __get_home_runtime_roots();
+
+  for (var i = 0; i < roots.length; i++) {
+    var match = __search_feed_candidate(roots[i], activeFeedId, 6, 40);
+    if (match) return match;
+  }
+
+  return null;
+}
+
+var __wx_home_runtime_state = {
+  lastProfileId: ''
+};
+
+function __publish_home_profile(profile, feed, reason) {
+  if (!profile) return null;
+
+  var profileId = profile.id ? String(profile.id) : '';
+  if (profileId && profileId === __wx_home_runtime_state.lastProfileId) {
+    if (reason) {
+      console.log('[home.js] 当前首页视频未变化，跳过重复上报:', reason, profileId);
+    }
+    return profile;
+  }
+
+  if (feed && typeof WXU !== 'undefined' && typeof WXU.set_feed === 'function') {
+    WXU.set_feed(feed);
+  } else {
+    if (window.__wx_channels_store__) {
+      window.__wx_channels_store__.profile = profile;
+    }
+
+    fetch('/__wx_channels_api/profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(profile)
+    }).catch(function () { });
+
+    fetch('/__wx_channels_api/tip', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ msg: '📹 ' + (profile.nickname || '未知作者') + ' - ' + (profile.title || '').substring(0, 30) + '...' })
+    }).catch(function () { });
+  }
+
+  __wx_home_runtime_state.lastProfileId = profileId;
+  if (reason) {
+    console.log('[home.js] 已上报当前首页视频:', reason, profile.id, profile.title);
+  }
+  return profile;
+}
+
+function __get_current_home_profile() {
+  var activeFeedId = __get_active_home_feed_id();
+  var storeProfile = window.__wx_channels_store__ && window.__wx_channels_store__.profile;
+
+  if (storeProfile && (!activeFeedId || String(storeProfile.id) === String(activeFeedId))) {
+    return storeProfile;
+  }
+
+  var feed = __locate_current_home_feed();
+  if (feed && typeof WXU !== 'undefined' && WXU.format_feed) {
+    var formatted = WXU.format_feed(feed);
+    if (formatted) {
+      return __publish_home_profile(formatted, feed, 'runtime');
+    }
+  }
+
+  var fallback = __extract_profile_from_dom_fallback(activeFeedId);
+  if (fallback && fallback.url && String(fallback.url).indexOf('blob:') !== 0) {
+    return __publish_home_profile(fallback, null, 'dom-fallback');
+  }
+
+  return null;
+}
+
+function __sync_home_profile_with_runtime(forceLog) {
+  var profile = __get_current_home_profile();
+  if (!profile) return null;
+
+  if (forceLog) {
+    console.log('[home.js] 已同步当前首页视频:', profile.id, profile.title);
+  }
+
+  return profile;
+}
+
+function __resolve_current_home_profile(retryCount, intervalMs) {
+  retryCount = typeof retryCount === 'number' ? retryCount : 4;
+  intervalMs = typeof intervalMs === 'number' ? intervalMs : 240;
+
+  return new Promise(function (resolve) {
+    var attempts = 0;
+
+    function tryResolve() {
+      attempts += 1;
+      var profile = __sync_home_profile_with_runtime(attempts === 1);
+      if (profile) {
+        resolve(profile);
+        return;
+      }
+
+      if (attempts >= retryCount) {
+        resolve(null);
+        return;
+      }
+
+      setTimeout(tryResolve, intervalMs);
+    }
+
+    tryResolve();
+  });
 }
 
 // ==================== 下载选项菜单 ====================
@@ -318,16 +605,19 @@ function __show_home_download_options(profile) {
 
   var menu = document.createElement('div');
   menu.id = 'wx-download-menu';
-  menu.style.cssText = 'position:fixed;top:60px;right:20px;z-index:99999;background:#2b2b2b;color:#e5e5e5;border-radius:8px;padding:0;width:280px;box-shadow:0 8px 24px rgba(0,0,0,0.5);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:14px;';
+  menu.style.cssText = 'position:fixed;z-index:99999;background:#2b2b2b;color:#e5e5e5;border-radius:8px;padding:0;width:280px;box-shadow:0 8px 24px rgba(0,0,0,0.5);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:14px;';
 
   var title = profile.title || '未知视频';
   var shortTitle = title.length > 30 ? title.substring(0, 30) + '...' : title;
+  var currentTabName = __get_tab_display_name(__current_tab__);
+  var currentTabDesc = __get_tab_description(__current_tab__);
 
   var html = '';
 
   // 标题栏
   html += '<div style="padding:16px 20px;border-bottom:1px solid rgba(255,255,255,0.08);">';
-  html += '<div style="font-size:15px;font-weight:500;color:#fff;margin-bottom:8px;">下载选项</div>';
+  html += '<div style="font-size:15px;font-weight:500;color:#fff;margin-bottom:8px;">' + currentTabName + ' 下载选项</div>';
+  html += '<div style="font-size:12px;color:#07c160;margin-bottom:6px;line-height:1.4;">' + currentTabDesc + '</div>';
   html += '<div style="font-size:13px;color:#999;line-height:1.4;">' + shortTitle + '</div>';
   html += '</div>';
 
@@ -360,6 +650,21 @@ function __show_home_download_options(profile) {
 
   menu.innerHTML = html;
   document.body.appendChild(menu);
+
+  var anchor = null;
+  var button = document.getElementById('wx-home-download-icon');
+  anchor = button;
+  if (anchor && anchor.getBoundingClientRect) {
+    var rect = anchor.getBoundingClientRect();
+    var menuWidth = 280;
+    var left = Math.max(16, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 16));
+    var top = Math.max(56, rect.bottom + 12);
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+  } else {
+    menu.style.right = '20px';
+    menu.style.top = '60px';
+  }
 
   // 添加遮罩
   var overlay = document.createElement('div');
@@ -423,13 +728,12 @@ async function insert_download_btn() {
   // Home页面
   if (pathname.includes('/pages/home')) {
     console.log('[home.js] 检测到Home页面');
-    var success = await __insert_download_btn_to_home_page();
-    if (success) {
-      setTimeout(function () {
-        __start_home_slide_monitor();
-        // 启动tab监听
-        __start_tab_monitor();
-      }, 500);
+    __start_tab_monitor();
+    __start_home_slide_monitor();
+    __update_tab_display();
+    var inserted = await __insert_download_btn_to_home_page();
+    if (inserted) {
+      __sync_home_profile_with_runtime(false);
       return;
     }
   }
@@ -442,67 +746,13 @@ console.log('[home.js] Home页面模块加载完成');
 
 // ==================== 事件监听 ====================
 
-// 监听首页推荐视频列表加载
+// 监听推荐流数据加载，用于初始化当前视频
 WXE.onPCFlowLoaded(function (data) {
   // 兼容旧格式 (直接返回数组) 和新格式 ({feeds: [], params: {}})
   var feeds = Array.isArray(data) ? data : (data.feeds || []);
-  var params = (data && !Array.isArray(data)) ? (data.params || {}) : {};
-
-  // console.log('[home.js] onPCFlowLoaded 事件触发，feeds数量:', feeds ? feeds.length : 0);
-  // console.log('[home.js] onPCFlowLoaded 参数:', JSON.stringify(params));
-
-  // 过滤非首页数据
-  // [新增] 排除 displayTabType: 3 (通常是相关推荐/非首页流)
-  var isHomeData = false;
-  if ((params.scene == 1 || params.scene == 2) || (!params.scene && params.displayTabType != 3)) {
-    isHomeData = true;
-  } else {
-    // console.warn('[home.js] 忽略非首页数据 (scene:', params.scene, 'displayTabType:', params.displayTabType, ')');
-  }
-
-  if (isHomeData && feeds && feeds.length > 0) {
-    // 同时也作为 "首页" 分类的缓存
-    var tagName = "首页";
-    if (!__category_feeds_cache__[tagName]) {
-      __category_feeds_cache__[tagName] = [];
-      console.log('[home.js] 初始化首页缓存');
-    }
-
-    // 追加新视频（去重 + 严格过滤 cgi_id=6638）
-    var existingIds = {};
-    __category_feeds_cache__[tagName].forEach(function (f) {
-      existingIds[f.id] = true;
-    });
-
-    var newCount = 0;
-    var ignoredCount = 0;
-
-    feeds.forEach(function (feed) {
-      if (feed.id && !existingIds[feed.id]) {
-        __category_feeds_cache__[tagName].push(feed);
-        existingIds[feed.id] = true;
-        newCount++;
-      }
-    });
-
-    var totalCount = __category_feeds_cache__[tagName].length;
-    console.log('[home.js] "首页" (PCFlow) 新增', newCount, '个视频 (忽略 ' + ignoredCount + ' 个非首页数据)，总计:', totalCount);
-
-    // 如果当前选中的是首页，显示提示
-    var currentTabName = __get_tab_display_name(__current_tab__);
-    if (currentTabName === '首页') {
-      if (ignoredCount > 0) {
-        __wx_log({ msg: '✅ "首页" 加载 ' + totalCount + ' 个视频 (已过滤 ' + ignoredCount + ' 个杂项)' });
-      } else {
-        __wx_log({ msg: '✅ "首页" 已加载 ' + totalCount + ' 个视频' });
-      }
-    }
-
-    // 设置第一个视频为当前视频（兼容旧逻辑）
-    // 注意：如果全部被过滤了，feeds[0] 可能是不合法的，但 set_feed 应该能处理
-    if (feeds.length > 0) {
-      WXU.set_feed(feeds[0]);
-    }
+  if (feeds && feeds.length > 0) {
+    console.log('[home.js] PCFlowLoaded 收到视频流:', feeds.length);
+    WXU.set_feed(feeds[0]);
   }
 });
 
@@ -541,99 +791,3 @@ if (WXE.onSearchResultLoaded) {
   });
 }
 
-// 新增：监听分类视频列表加载（首页、美食、生活等分类tab）
-if (WXE.onCategoryFeedsLoaded) {
-  WXE.onCategoryFeedsLoaded(function (data) {
-    // data 包含 {feeds: [], params: {}}
-    var feeds = data.feeds || data; // 兼容旧格式
-    var params = data.params || {};
-
-    console.log('[home.js] CategoryFeedsLoaded 触发, 参数:', JSON.stringify(params));
-    console.log('[home.js] 提取到视频数:', feeds ? feeds.length : 0);
-
-    // 提取分类名称
-    var apiTagName = '';
-
-    // 情况1: 显式指定了分类名称 (如：美食、旅行)
-    if (params.tagItem && params.tagItem.topTag && params.tagItem.topTag.tagName) {
-      apiTagName = params.tagItem.topTag.tagName;
-    }
-    // 情况2: 首页场景
-    // 通常 scene 为 1，且没有 tagItem
-    else if (params.scene == 1 || !params.scene) {
-      apiTagName = '首页';
-      console.log('[home.js] 未检测到tagName，判定为 "首页" 数据 (scene:', params.scene, ')');
-    }
-
-    // 初始化该分类的缓存
-    if (!__category_feeds_cache__[apiTagName]) {
-      __category_feeds_cache__[apiTagName] = [];
-      console.log('[home.js] 初始化分类缓存:', apiTagName);
-    }
-
-    // 追加新视频（去重）
-    var existingIds = {};
-    __category_feeds_cache__[apiTagName].forEach(function (f) {
-      existingIds[f.id] = true;
-    });
-
-    var newCount = 0;
-    var ignoredCount = 0;
-
-    feeds.forEach(function (feed) {
-      if (feed.id && !existingIds[feed.id]) {
-        __category_feeds_cache__[apiTagName].push(feed);
-        existingIds[feed.id] = true;
-        newCount++;
-      }
-    });
-
-    var totalCount = __category_feeds_cache__[apiTagName].length;
-
-    console.log('[home.js] "' + apiTagName + '" 新增', newCount, '个视频 (忽略 ' + ignoredCount + ' 个)，总计:', totalCount);
-
-    // 如果弹窗已打开且是当前分类，实时更新UI（使用通用组件）
-    var currentTabName = __get_tab_display_name(__current_tab__);
-    if (window.__wx_batch_download_manager__ &&
-      window.__wx_batch_download_manager__.isVisible &&
-      apiTagName === currentTabName) {
-      __update_batch_download_ui__(feeds, apiTagName + ' - 视频列表');
-    }
-
-    // 始终显示提示（特别是首页）
-    if (apiTagName === currentTabName) {
-      __wx_log({ msg: '✅ "' + currentTabName + '" 已加载 ' + totalCount + ' 个视频' });
-    }
-  });
-
-  // 监听tab切换，显示缓存的视频数量
-  var __original_update_tab_display__ = __update_tab_display;
-  __update_tab_display = function () {
-    var oldTab = __current_tab__;
-    __original_update_tab_display__();
-
-    // 如果tab发生了变化
-    if (oldTab !== __current_tab__) {
-      var newTabName = __get_tab_display_name(__current_tab__);
-      console.log('[home.js] Tab 已切换:', oldTab, '->', __current_tab__, '(', newTabName, ')');
-
-      // 不再在切换时立即清除缓存，允许用户切换回来查看
-      // if (oldTabName && __category_feeds_cache__[oldTabName]) {
-      //   console.log('[home.js] 清空旧tab缓存:', oldTabName);
-      //   delete __category_feeds_cache__[oldTabName];
-      // }
-
-      // 如果是视频列表类型，显示提示
-      if (__current_tab_type__ === 'video-list' || __current_tab__ === 'home') {
-        var currentTabName = __get_tab_display_name(__current_tab__);
-        var cachedFeeds = __category_feeds_cache__[currentTabName];
-
-        if (cachedFeeds !== undefined && cachedFeeds.length > 0) {
-          __wx_log({ msg: '📍 "' + currentTabName + '" - 已加载 ' + cachedFeeds.length + ' 个视频' });
-        } else {
-          __wx_log({ msg: '📍 "' + currentTabName + '" - 等待加载数据...' });
-        }
-      }
-    }
-  };
-}

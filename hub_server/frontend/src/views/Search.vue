@@ -9,6 +9,7 @@
                <div v-if="client" class="px-2 md:px-3 py-0.5 md:py-1 rounded-full bg-primary/10 text-primary text-[10px] md:text-xs font-bold flex items-center gap-1 md:gap-2 max-w-[45%] truncate">
                  <i class="pi pi-desktop text-[10px] md:text-xs shrink-0"></i>
                  <span class="truncate">{{ client.hostname }}</span>
+                 <span v-if="client.supports_search" class="shrink-0 text-emerald-600">搜索就绪</span>
                </div>
                <div v-else class="px-2 md:px-3 py-0.5 md:py-1 rounded-full bg-yellow-50 text-yellow-700 text-[10px] md:text-xs font-bold flex items-center gap-1 md:gap-2 border border-yellow-200 cursor-pointer hover:bg-yellow-100 transition-colors" @click="handleSearch(false)">
                  <i class="pi pi-bolt text-[10px] md:text-xs"></i>
@@ -52,6 +53,18 @@
                         {{ type.label }}
                     </button>
                </div>
+           </div>
+
+           <div v-if="client" class="flex flex-wrap items-center gap-2 px-1 md:px-2">
+                <Tag :value="client.api_ready ? 'API已就绪' : 'API未就绪'" :severity="client.api_ready ? 'success' : 'secondary'" rounded class="!text-[10px] md:!text-xs" />
+                <Tag :value="client.page_path || '未上报页面'" severity="secondary" rounded class="!text-[10px] md:!text-xs" />
+                <Tag v-if="client.supports_search" :value="`搜索 ${client.search_ready_clients || 0}`" severity="info" rounded class="!text-[10px] md:!text-xs" />
+                <Tag v-if="client.supports_feed" :value="`列表 ${client.feed_ready_clients || 0}`" severity="warning" rounded class="!text-[10px] md:!text-xs" />
+                <Tag v-if="client.supports_profile" :value="`详情 ${client.profile_ready_clients || 0}`" severity="help" rounded class="!text-[10px] md:!text-xs" />
+                <Button label="切换到最佳设备" icon="pi pi-sync" text size="small" class="!text-xs md:!text-sm" @click="selectBestClient" />
+           </div>
+           <div v-if="client && !client.supports_search" class="px-3 py-2 rounded-xl bg-yellow-50 border border-yellow-200 text-yellow-800 text-xs md:text-sm">
+                当前设备在线，但还没有搜索能力。点击“切换到最佳设备”或在该设备上打开并激活支持搜索的视频号页面。
            </div>
        </div>
     </div>
@@ -238,6 +251,9 @@ const subscribing = ref(false)
 
 onMounted(() => {
     loadSubscriptions()
+    if (!clientStore.currentClient) {
+        clientStore.ensureBestClient('search')
+    }
 })
 
 watch(searchType, () => {
@@ -255,9 +271,11 @@ const handleSearch = async (loadMore = false) => {
   
   if (!client.value) {
        await clientStore.fetchClients() 
-       if (!clientStore.currentClient && clientStore.clients.length > 0) {
-           clientStore.setCurrentClient(clientStore.clients[0].id)
+       if (!clientStore.currentClient) {
+           clientStore.ensureBestClient('search')
        }
+  } else if (!client.value.supports_search) {
+       clientStore.ensureBestClient('search')
   }
   
   searching.value = true
@@ -305,6 +323,13 @@ const handleSearch = async (loadMore = false) => {
   } finally {
     searching.value = false
   }
+}
+
+const selectBestClient = async () => {
+    if (!clientStore.clients.length) {
+        await clientStore.fetchClients()
+    }
+    clientStore.ensureBestClient('search')
 }
 
 const openDetail = async (item) => {

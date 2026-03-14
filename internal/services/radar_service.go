@@ -50,6 +50,9 @@ func (s *RadarService) Start() {
 	if s.ticker != nil {
 		return // 已启动
 	}
+	if s.ctx == nil || s.ctx.Err() != nil {
+		s.ctx, s.cancel = context.WithCancel(context.Background())
+	}
 
 	// 默认每分钟检查一次，但实际是否触发取决于每个 target 的 interval_minutes
 	s.ticker = time.NewTicker(time.Minute)
@@ -78,12 +81,22 @@ func (s *RadarService) Start() {
 // Stop 停止雷达服务
 func (s *RadarService) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.cancel()
+	if s.ticker == nil {
+		s.mu.Unlock()
+		return
+	}
+	cancel := s.cancel
+	ticker := s.ticker
 	if s.ticker != nil {
-		s.ticker.Stop()
 		s.ticker = nil
+	}
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if ticker != nil {
+		ticker.Stop()
 	}
 	s.wg.Wait()
 }

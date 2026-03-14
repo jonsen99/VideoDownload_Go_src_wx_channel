@@ -1,4 +1,3 @@
-```
 <template>
   <div class="min-h-screen bg-bg p-4 lg:p-12 font-sans text-text">
     <header class="flex justify-end items-center mb-6 lg:mb-12">
@@ -16,7 +15,7 @@
     </header>
 
     <!-- Stats Cards -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 lg:gap-6 mb-6 lg:mb-12">
+    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 lg:gap-6 mb-6 lg:mb-12">
         <div class="bg-surface-0 rounded-2xl p-4 lg:p-6 shadow-sm border border-surface-100 flex items-center justify-between">
             <div>
                 <p class="text-text-muted text-xs lg:text-sm font-medium uppercase tracking-wider mb-1">总设备数</p>
@@ -37,11 +36,29 @@
         </div>
         <div class="bg-surface-0 rounded-2xl p-4 lg:p-6 shadow-sm border border-surface-100 flex items-center justify-between">
             <div>
-                <p class="text-text-muted text-xs lg:text-sm font-medium uppercase tracking-wider mb-1">离线</p>
-                <div class="text-2xl lg:text-3xl font-bold text-text-muted">{{ offlineCount }}</div>
+                <p class="text-text-muted text-xs lg:text-sm font-medium uppercase tracking-wider mb-1">搜索就绪</p>
+                <div class="text-2xl lg:text-3xl font-bold text-blue-500">{{ searchReadyCount }}</div>
             </div>
-            <div class="w-10 h-10 lg:w-12 lg:h-12 rounded-full flex items-center justify-center transition-colors bg-surface-100 text-text-muted">
-                <i class="pi pi-power-off text-lg lg:text-xl"></i>
+            <div class="w-10 h-10 lg:w-12 lg:h-12 rounded-full flex items-center justify-center bg-blue-50 text-blue-500">
+                <i class="pi pi-search text-lg lg:text-xl"></i>
+            </div>
+        </div>
+        <div class="bg-surface-0 rounded-2xl p-4 lg:p-6 shadow-sm border border-surface-100 flex items-center justify-between">
+            <div>
+                <p class="text-text-muted text-xs lg:text-sm font-medium uppercase tracking-wider mb-1">列表就绪</p>
+                <div class="text-2xl lg:text-3xl font-bold text-amber-500">{{ feedReadyCount }}</div>
+            </div>
+            <div class="w-10 h-10 lg:w-12 lg:h-12 rounded-full flex items-center justify-center bg-amber-50 text-amber-500">
+                <i class="pi pi-list text-lg lg:text-xl"></i>
+            </div>
+        </div>
+        <div class="bg-surface-0 rounded-2xl p-4 lg:p-6 shadow-sm border border-surface-100 flex items-center justify-between">
+            <div>
+                <p class="text-text-muted text-xs lg:text-sm font-medium uppercase tracking-wider mb-1">详情就绪</p>
+                <div class="text-2xl lg:text-3xl font-bold text-violet-500">{{ profileReadyCount }}</div>
+            </div>
+            <div class="w-10 h-10 lg:w-12 lg:h-12 rounded-full flex items-center justify-center bg-violet-50 text-violet-500">
+                <i class="pi pi-file text-lg lg:text-xl"></i>
             </div>
         </div>
     </div>
@@ -103,7 +120,7 @@
           </div>
           
           <!-- Metrics -->
-          <div class="space-y-2 lg:space-y-4 mb-4 lg:mb-8 flex-1">
+             <div class="space-y-2 lg:space-y-4 mb-4 lg:mb-8 flex-1">
              <div class="flex items-center justify-between p-2 lg:p-3 rounded-lg lg:rounded-xl bg-surface-50">
                  <span class="text-[10px] lg:text-xs font-bold text-text-muted uppercase tracking-wider">版本</span>
                  <span class="text-xs lg:text-sm font-semibold text-text">v{{ client.version || '1.0.0' }}</span>
@@ -117,6 +134,22 @@
              <div class="flex items-center justify-between p-2 lg:p-3 rounded-lg lg:rounded-xl bg-surface-50">
                  <span class="text-[10px] lg:text-xs font-bold text-text-muted uppercase tracking-wider">最近心跳</span>
                  <span class="text-xs lg:text-sm font-semibold text-text">{{ timeAgo(client.last_seen) }}</span>
+             </div>
+             <div class="flex items-center justify-between p-2 lg:p-3 rounded-lg lg:rounded-xl bg-surface-50">
+                 <span class="text-[10px] lg:text-xs font-bold text-text-muted uppercase tracking-wider">当前页面</span>
+                 <span class="text-[10px] lg:text-xs font-semibold text-text truncate max-w-[130px] lg:max-w-[160px]" :title="client.page_path || client.href">
+                    {{ client.page_path || '未上报' }}
+                 </span>
+             </div>
+             <div class="p-2 lg:p-3 rounded-lg lg:rounded-xl bg-surface-50">
+                 <div class="text-[10px] lg:text-xs font-bold text-text-muted uppercase tracking-wider mb-2">页面能力</div>
+                 <div class="flex flex-wrap gap-2">
+                    <Tag :value="client.api_ready ? 'API就绪' : '未就绪'" :severity="client.api_ready ? 'success' : 'secondary'" rounded class="!text-[10px]" />
+                    <Tag v-if="client.supports_search" value="可搜索" severity="info" rounded class="!text-[10px]" />
+                    <Tag v-if="client.supports_feed" value="可列表" severity="warning" rounded class="!text-[10px]" />
+                    <Tag v-if="client.supports_profile" value="可详情" severity="help" rounded class="!text-[10px]" />
+                    <Tag v-if="!client.supports_search && !client.supports_feed && !client.supports_profile" value="无可用能力" severity="secondary" rounded class="!text-[10px]" />
+                 </div>
              </div>
           </div>
 
@@ -162,7 +195,9 @@ const router = useRouter()
 let timer = null
 
 const onlineCount = computed(() => clientStore.clients.filter(c => c.status === 'online').length)
-const offlineCount = computed(() => clientStore.clients.filter(c => c.status !== 'online').length)
+const searchReadyCount = computed(() => clientStore.clients.filter(c => c.status === 'online' && c.supports_search).length)
+const feedReadyCount = computed(() => clientStore.clients.filter(c => c.status === 'online' && c.supports_feed).length)
+const profileReadyCount = computed(() => clientStore.clients.filter(c => c.status === 'online' && c.supports_profile).length)
 
 onMounted(() => {
   clientStore.fetchClients()

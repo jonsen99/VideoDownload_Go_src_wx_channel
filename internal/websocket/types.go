@@ -11,6 +11,7 @@ const (
 	WSMessageTypePing        WSMessageType = "ping"
 	WSMessageTypePong        WSMessageType = "pong"
 	WSMessageTypeCommand     WSMessageType = "cmd"
+	WSMessageTypeClientState WSMessageType = "client_state"
 )
 
 // WebSocket 消息
@@ -53,4 +54,29 @@ type FeedProfileBody struct {
 	ObjectID string `json:"objectId"`
 	NonceID  string `json:"nonceId"`
 	URL      string `json:"url"`
+}
+
+// ClientStateBody 前端客户端状态
+type ClientStateBody struct {
+	PagePath   string          `json:"pagePath"`
+	Href       string          `json:"href"`
+	APIReady   bool            `json:"apiReady"`
+	Methods    map[string]bool `json:"methods"`
+	Timestamp  int64           `json:"timestamp"`
+	UserAgent  string          `json:"userAgent,omitempty"`
+	Visible    bool            `json:"visible,omitempty"`
+}
+
+type ClientStatus struct {
+	RemoteAddr      string          `json:"remote_addr"`
+	PagePath        string          `json:"page_path"`
+	Href            string          `json:"href"`
+	APIReady        bool            `json:"api_ready"`
+	Methods         map[string]bool `json:"methods"`
+	ActiveRequests  int             `json:"active_requests"`
+	LastSeenAt      string          `json:"last_seen_at"`
+	LastPingAt      string          `json:"last_ping_at"`
+	SupportsSearch  bool            `json:"supports_search"`
+	SupportsFeed    bool            `json:"supports_feed"`
+	SupportsProfile bool            `json:"supports_profile"`
 }

@@ -13,6 +13,41 @@ import (
 	"wx_channel/hub_server/ws"
 )
 
+func requiredCapability(action string, data json.RawMessage) string {
+	if action != "api_call" {
+		return ""
+	}
+	var apiData struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(data, &apiData); err != nil {
+		return ""
+	}
+	switch apiData.Key {
+	case "key:channels:contact_list":
+		return "search"
+	case "key:channels:feed_list":
+		return "feed"
+	case "key:channels:feed_profile":
+		return "profile"
+	default:
+		return ""
+	}
+}
+
+func nodeSupportsCapability(node models.Node, capability string) bool {
+	switch capability {
+	case "search":
+		return node.SupportsSearch
+	case "feed":
+		return node.SupportsFeed
+	case "profile":
+		return node.SupportsProfile
+	default:
+		return true
+	}
+}
+
 func GetTasks(w http.ResponseWriter, r *http.Request) {
 	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
@@ -150,19 +185,35 @@ func RemoteCall(hub *ws.Hub) http.HandlerFunc {
 				return
 			}
 
-			// Find first online device
+			required := requiredCapability(req.Action, req.Data)
+
+			// Prefer a ready online device with required capability.
 			for _, device := range user.Devices {
-				if device.Status == "online" {
+				if device.Status == "online" && nodeSupportsCapability(device, required) {
 					clientID = device.ID
 					break
 				}
 			}
 
+			// Fallback to any online device for backward compatibility.
 			if clientID == "" {
+				for _, device := range user.Devices {
+					if device.Status == "online" {
+						clientID = device.ID
+						break
+					}
+				}
+			}
+
+			if clientID == "" {
+				msg := "No online device found"
+				if required != "" {
+					msg = "No online ready device supports this action"
+				}
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]interface{}{
 					"code":    -1,
-					"message": "No online device found",
+					"message": msg,
 				})
 				return
 			}

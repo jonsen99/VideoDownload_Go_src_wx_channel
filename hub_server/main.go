@@ -12,8 +12,7 @@ import (
 	"wx_channel/hub_server/controllers"
 	"wx_channel/hub_server/database"
 	"wx_channel/hub_server/middleware"
-	"wx_channel/hub_server/services"
-	"wx_channel/hub_server/utils" // Added utils import
+	"wx_channel/hub_server/services" // Added utils import
 	"wx_channel/hub_server/ws"
 
 	"github.com/gorilla/mux"
@@ -188,6 +187,6 @@ func main() {
 	// 适当放宽 GC 回收条件。牺牲小部分内存，换取平稳的高负载表现
 	debug.SetGCPercent(200)
 
-	utils.LogInfo("Starting Hub Server...")
+	// utils.LogInfo("Starting Hub Server...")
 	log.Fatal(http.ListenAndServe(":8080", router))
 }

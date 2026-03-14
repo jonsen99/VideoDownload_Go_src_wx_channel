@@ -57,7 +57,7 @@ func NewAPIRouter(cfg *config.Config, hub *websocket.Hub, sunny *SunnyNet.Sunny)
 
 	router := &APIRouter{
 		mux:                mux,
-		consoleHandler:     handlers.NewConsoleAPIHandler(cfg, hub),
+		consoleHandler:     handlers.NewConsoleAPIHandler(cfg, hub, nil),
 		searchService:      api.NewSearchService(hub),
 		systemService:      api.NewSystemService(),
 		logsService:        api.NewLogsService(cfg),

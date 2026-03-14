@@ -5,33 +5,417 @@ console.log('[feed.js] 加载Feed页面模块');
 
 // ==================== Feed页面下载按钮注入 ====================
 
+function __build_feed_header_icon(id, title, svgMarkup) {
+  var wrapper = document.createElement('div');
+  wrapper.id = id;
+  wrapper.className = 'relative h-5 w-5 flex-initial flex-shrink-0 cursor-pointer';
+  wrapper.title = title;
+  wrapper.style.cssText = [
+    'display:flex',
+    'align-items:center',
+    'justify-content:center',
+    'color:rgba(255,255,255,0.5)',
+    'transition:color 0.2s ease, opacity 0.2s ease',
+    'margin-right:16px'
+  ].join(';');
+  wrapper.innerHTML = svgMarkup;
+  wrapper.onmouseenter = function () {
+    wrapper.style.color = 'rgba(255,255,255,0.82)';
+  };
+  wrapper.onmouseleave = function () {
+    wrapper.style.color = 'rgba(255,255,255,0.5)';
+  };
+  return wrapper;
+}
+
+function __get_visible_feed_op_items() {
+  var selectors = [
+    '.op-item',
+    '[class*="op-item"]',
+    '.op-list > div',
+    '.action-list > div'
+  ];
+  for (var i = 0; i < selectors.length; i++) {
+    var nodes = Array.prototype.slice.call(document.querySelectorAll(selectors[i])).filter(function (node) {
+      return node && node.offsetParent !== null;
+    });
+    if (nodes.length >= 3) return nodes;
+  }
+  return [];
+}
+
+function __try_open_feed_comment_panel() {
+  var commentPanel = document.querySelector(
+    '.comment-list, .comment-panel, .comment-drawer, [class*="comment-panel"], [class*="comment-drawer"], [class*="comment-list"]'
+  );
+  if (commentPanel) return true;
+
+  var actionCandidates = __get_visible_feed_op_items();
+  if (actionCandidates.length) {
+    var commentAction = actionCandidates[actionCandidates.length - 1];
+    try {
+      commentAction.click();
+      return true;
+    } catch (e) {
+      console.warn('[feed.js] 点击原生评论按钮失败:', e);
+    }
+  }
+
+  try {
+    var app = document.querySelector('[data-v-app]') || document.getElementById('app');
+    var vue = app && (app.__vue__ || app.__vueParentComponent || (app._vnode && app._vnode.component));
+    var pinia = vue && vue.appContext && vue.appContext.config && vue.appContext.config.globalProperties && vue.appContext.config.globalProperties.$pinia;
+    if (pinia && pinia._s && typeof pinia._s.forEach === 'function') {
+      var methodNames = ['openComment', 'openCommentPanel', 'showCommentPanel', 'toggleCommentPanel', 'onClickComment', 'handleCommentClick'];
+      var opened = false;
+      pinia._s.forEach(function (store) {
+        if (opened || !store) return;
+        for (var i = 0; i < methodNames.length; i++) {
+          var methodName = methodNames[i];
+          if (typeof store[methodName] === 'function') {
+            try {
+              store[methodName]();
+              opened = true;
+              break;
+            } catch (_) {}
+          }
+        }
+      });
+      if (opened) return true;
+    }
+  } catch (e) {
+    console.warn('[feed.js] 调用评论面板方法失败:', e);
+  }
+
+  return false;
+}
+
+function __start_feed_comment_collection_with_open_panel() {
+  var opened = __try_open_feed_comment_panel();
+  if (opened) {
+    __wx_log({ msg: '💬 正在打开评论区...' });
+  } else {
+    __wx_log({ msg: '💬 未定位到原生评论按钮，尝试直接采集...' });
+  }
+
+  var attempts = 0;
+  var maxAttempts = 16;
+  var timer = setInterval(function () {
+    attempts++;
+    if (typeof window.__wx_channels_start_comment_collection === 'function') {
+      try {
+        window.__wx_channels_start_comment_collection();
+      } finally {
+        clearInterval(timer);
+      }
+      return;
+    }
+    if (attempts >= maxAttempts) {
+      clearInterval(timer);
+      __wx_log({ msg: '❌ 评论采集功能尚未就绪，请稍后重试' });
+    }
+  }, opened ? 350 : 120);
+}
+
+var __wx_feed_runtime_state = {
+  activeFeedId: '',
+  monitorStarted: false
+};
+
+function __get_active_feed_element() {
+  var feedNodes = document.querySelectorAll('[id^="flow-feed-"]');
+  if (!feedNodes || feedNodes.length === 0) return null;
+
+  var viewportTop = 0;
+  var viewportBottom = window.innerHeight || document.documentElement.clientHeight || 0;
+  var viewportRight = window.innerWidth || document.documentElement.clientWidth || 0;
+  var bestNode = null;
+  var bestScore = -1;
+
+  for (var i = 0; i < feedNodes.length; i++) {
+    var node = feedNodes[i];
+    if (!node || !node.getBoundingClientRect) continue;
+    var rect = node.getBoundingClientRect();
+    var visibleHeight = Math.min(rect.bottom, viewportBottom) - Math.max(rect.top, viewportTop);
+    var visibleWidth = Math.min(rect.right, viewportRight) - Math.max(rect.left, 0);
+    var score = Math.max(0, visibleHeight) * Math.max(0, visibleWidth);
+    if (score > bestScore) {
+      bestScore = score;
+      bestNode = node;
+    }
+  }
+
+  return bestNode;
+}
+
+function __get_active_feed_id() {
+  var node = __get_active_feed_element();
+  if (!node || !node.id) return '';
+  return node.id.replace(/^flow-feed-/, '');
+}
+
+function __is_feed_candidate(obj) {
+  return !!(obj &&
+    typeof obj === 'object' &&
+    obj.objectDesc &&
+    obj.objectDesc.media &&
+    obj.objectDesc.media[0] &&
+    (obj.objectDesc.mediaType === 4 || obj.objectDesc.mediaType === 2));
+}
+
+function __search_feed_candidate(root, activeFeedId, maxDepth, maxKeys) {
+  var visited = [];
+
+  function seen(obj) {
+    for (var i = 0; i < visited.length; i++) {
+      if (visited[i] === obj) return true;
+    }
+    visited.push(obj);
+    return false;
+  }
+
+  function isCandidateMatch(candidate) {
+    if (!candidate) return false;
+    if (!activeFeedId) return true;
+    var candidateId = candidate.id || candidate.objectId || candidate.objectNonceId || '';
+    return String(candidateId) === String(activeFeedId);
+  }
+
+  function walk(obj, depth) {
+    if (!obj || typeof obj !== 'object') return null;
+    if (seen(obj)) return null;
+    if (__is_feed_candidate(obj) && isCandidateMatch(obj)) {
+      return obj;
+    }
+    if (depth >= maxDepth) return null;
+
+    if (Array.isArray(obj)) {
+      for (var ai = 0; ai < obj.length && ai < maxKeys; ai++) {
+        var arrayMatch = walk(obj[ai], depth + 1);
+        if (arrayMatch) return arrayMatch;
+      }
+      return null;
+    }
+
+    var keys = [];
+    try {
+      keys = Object.keys(obj);
+    } catch (e) {
+      return null;
+    }
+
+    for (var i = 0; i < keys.length && i < maxKeys; i++) {
+      var key = keys[i];
+      if (key === 'parent' || key === 'appContext' || key === 'provides' || key === 'deps') continue;
+
+      var value = null;
+      try {
+        value = obj[key];
+      } catch (e) {
+        continue;
+      }
+
+      if (!value || (typeof value !== 'object' && !Array.isArray(value))) continue;
+
+      var nestedMatch = walk(value, depth + 1);
+      if (nestedMatch) return nestedMatch;
+    }
+
+    return null;
+  }
+
+  return walk(root, 0);
+}
+
+function __get_feed_runtime_roots() {
+  var roots = [];
+  var activeFeedNode = __get_active_feed_element();
+  var app = document.getElementById('app') || document.querySelector('[data-v-app]');
+
+  function push(root) {
+    if (root) roots.push(root);
+  }
+
+  push(activeFeedNode);
+  push(activeFeedNode && activeFeedNode.__vueParentComponent);
+  push(activeFeedNode && activeFeedNode.__vnode);
+  push(activeFeedNode && activeFeedNode._vnode);
+
+  if (app) {
+    push(app.__vue_app__);
+    push(app.__vueParentComponent);
+    push(app.__vnode);
+    push(app._vnode);
+  }
+
+  try {
+    var appInstance = app && (app.__vue_app__ || (app.__vueParentComponent && app.__vueParentComponent.appContext && app.__vueParentComponent.appContext.app));
+    var appContext = appInstance && (appInstance._context || appInstance.context);
+    var globalProperties = appContext && appContext.config && appContext.config.globalProperties;
+    var pinia = globalProperties && globalProperties.$pinia;
+
+    push(appContext);
+    push(globalProperties);
+    push(pinia);
+
+    if (pinia && pinia._s && typeof pinia._s.forEach === 'function') {
+      pinia._s.forEach(function (store) {
+        push(store);
+        push(store.$state);
+      });
+    }
+  } catch (e) {
+    console.warn('[feed.js] 获取 feed runtime roots 失败:', e);
+  }
+
+  return roots;
+}
+
+function __locate_current_feed_runtime() {
+  var activeFeedId = __get_active_feed_id();
+  var roots = __get_feed_runtime_roots();
+
+  for (var i = 0; i < roots.length; i++) {
+    var match = __search_feed_candidate(roots[i], activeFeedId, 6, 40);
+    if (match) return match;
+  }
+
+  return null;
+}
+
+function __extract_profile_from_feed_dom_fallback(activeFeedId) {
+  var feedNode = __get_active_feed_element();
+  if (!feedNode) return null;
+
+  var descriptionNode = feedNode.querySelector('.content .ctn, .collapsed-text .ctn, .compute-node');
+  var authorNode = document.querySelector('.avatar-nickname .nickname, .author-name, .account-info .nickname');
+  var avatarNode = document.querySelector('.account-info img, .avatar-wrapper img, .author-info img');
+  var posterNode = feedNode.querySelector('.vjs-poster');
+  var mediaNode = feedNode.querySelector('.feed-video video, video');
+  var counts = document.querySelectorAll('.op-item .op-text, .op-item .count');
+
+  var thumbUrl = '';
+  if (posterNode && posterNode.style && posterNode.style.backgroundImage) {
+    var matched = posterNode.style.backgroundImage.match(/url\(["']?(.*?)["']?\)/);
+    if (matched && matched[1]) thumbUrl = matched[1];
+  }
+
+  var mediaUrl = mediaNode ? (mediaNode.currentSrc || mediaNode.src || '') : '';
+  if (mediaUrl && String(mediaUrl).indexOf('blob:') === 0) mediaUrl = '';
+
+  return {
+    id: activeFeedId || (feedNode.id || '').replace(/^flow-feed-/, ''),
+    type: 'media',
+    title: descriptionNode ? descriptionNode.textContent.trim() : '',
+    nickname: authorNode ? authorNode.textContent.trim() : '',
+    contact: {
+      nickname: authorNode ? authorNode.textContent.trim() : '',
+      avatar_url: avatarNode ? avatarNode.src : ''
+    },
+    thumbUrl: thumbUrl,
+    coverUrl: thumbUrl,
+    url: mediaUrl,
+    spec: [],
+    likeCount: counts[0] ? parseInt(counts[0].textContent.replace(/[^\d]/g, ''), 10) || 0 : 0,
+    forwardCount: counts[1] ? parseInt(counts[1].textContent.replace(/[^\d]/g, ''), 10) || 0 : 0,
+    favCount: counts[2] ? parseInt(counts[2].textContent.replace(/[^\d]/g, ''), 10) || 0 : 0,
+    commentCount: counts[3] ? parseInt(counts[3].textContent.replace(/[^\d]/g, ''), 10) || 0 : 0
+  };
+}
+
+function __remember_current_feed(feed, reason) {
+  if (!feed || typeof WXU === 'undefined' || !WXU.format_feed) return null;
+
+  var profile = WXU.format_feed(feed);
+  if (!profile) return null;
+
+  var prevProfile = window.__wx_channels_store__ && window.__wx_channels_store__.profile;
+  var prevId = prevProfile && prevProfile.id ? String(prevProfile.id) : '';
+  var nextId = profile.id ? String(profile.id) : '';
+
+  if (typeof WXU.set_feed === 'function' && prevId !== nextId) {
+    WXU.set_feed(feed);
+  } else if (window.__wx_channels_store__) {
+    window.__wx_channels_store__.profile = profile;
+  }
+
+  __wx_feed_runtime_state.activeFeedId = nextId || __get_active_feed_id();
+  if (reason) {
+    console.log('[feed.js] 已同步当前视频:', reason, profile.id, profile.title);
+  }
+  return profile;
+}
+
+function __sync_feed_profile_with_runtime(forceLog) {
+  var runtimeFeed = __locate_current_feed_runtime();
+  if (runtimeFeed) {
+    return __remember_current_feed(runtimeFeed, forceLog ? 'runtime' : '');
+  }
+
+  var fallback = __extract_profile_from_feed_dom_fallback(__get_active_feed_id());
+  if (fallback && fallback.url && window.__wx_channels_store__) {
+    window.__wx_channels_store__.profile = fallback;
+    __wx_feed_runtime_state.activeFeedId = fallback.id || __get_active_feed_id();
+    if (forceLog) {
+      console.log('[feed.js] 已使用 DOM fallback 同步当前视频:', fallback.id, fallback.title);
+    }
+    return fallback;
+  }
+
+  return window.__wx_channels_store__ && window.__wx_channels_store__.profile;
+}
+
+function __resolve_current_feed_profile(retryCount, intervalMs) {
+  retryCount = typeof retryCount === 'number' ? retryCount : 6;
+  intervalMs = typeof intervalMs === 'number' ? intervalMs : 220;
+
+  return new Promise(function (resolve) {
+    var attempts = 0;
+
+    function tryResolve() {
+      attempts += 1;
+      var profile = __sync_feed_profile_with_runtime(attempts === 1);
+      if (profile) {
+        resolve(profile);
+        return;
+      }
+      if (attempts >= retryCount) {
+        resolve(null);
+        return;
+      }
+      setTimeout(tryResolve, intervalMs);
+    }
+
+    tryResolve();
+  });
+}
+
+function __start_feed_slide_monitor() {
+  if (__wx_feed_runtime_state.monitorStarted) return;
+  __wx_feed_runtime_state.monitorStarted = true;
+
+  __wx_feed_runtime_state.activeFeedId = __get_active_feed_id();
+
+  setInterval(function () {
+    var activeFeedId = __get_active_feed_id();
+    if (!activeFeedId || activeFeedId === __wx_feed_runtime_state.activeFeedId) return;
+
+    __wx_feed_runtime_state.activeFeedId = activeFeedId;
+    console.log('[feed.js] 检测到当前视频切换:', activeFeedId);
+
+    setTimeout(function () { __sync_feed_profile_with_runtime(true); }, 80);
+    setTimeout(function () { __sync_feed_profile_with_runtime(false); }, 320);
+    setTimeout(function () { __sync_feed_profile_with_runtime(false); }, 900);
+  }, 500);
+}
+
 /** 注入Feed页面顶部工具栏按钮 */
 async function __insert_download_btn_to_feed_toolbar() {
   // 查找顶部工具栏容器
   var findToolbarContainer = function () {
-    // 尝试多种选择器
-    var container = document.querySelector('div[data-v-bf57a568].flex.items-center');
-    if (container) return container;
-
-    var parent = document.querySelector('div.flex-initial.flex-shrink-0.pl-6');
-    if (parent) {
-      container = parent.querySelector('.flex.items-center');
-      if (container) return container;
-    }
-
-    // 尝试查找包含相机图标的容器
-    var cameraIcon = document.querySelector('svg[data-v-bf57a568]');
-    if (cameraIcon) {
-      var current = cameraIcon;
-      while (current && current.parentElement) {
-        current = current.parentElement;
-        if (current.classList && current.classList.contains('flex') && current.classList.contains('items-center')) {
-          return current;
-        }
-      }
-    }
-
-    return null;
+    return document.querySelector('header.home-header > .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 > .flex.items-center') ||
+      document.querySelector('header.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center') ||
+      document.querySelector('.home-header .pointer-events-auto.flex-initial.flex-shrink-0.pl-4 .flex.items-center');
   };
 
   var tryInject = function () {
@@ -45,38 +429,33 @@ async function __insert_download_btn_to_feed_toolbar() {
     }
 
     // 创建评论图标
-    var commentIconWrapper = document.createElement('div');
-    commentIconWrapper.id = 'wx-feed-comment-icon';
-    commentIconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
-    commentIconWrapper.title = '采集评论';
-    // SVG: 气泡 Icon (Outline style, stroke-width=1.5)
-    commentIconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>';
+    var commentIconWrapper = __build_feed_header_icon(
+      'wx-feed-comment-icon',
+      '采集评论',
+      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M6.85 18.825L3 20.1l1.275-3.85A7.95 7.95 0 0 1 4 14.15c0-4.28 3.57-7.75 8-7.75s8 3.47 8 7.75-3.57 7.75-8 7.75c-.73 0-1.44-.1-2.1-.3a8.23 8.23 0 0 1-3.05-1.775Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>'
+    );
 
     commentIconWrapper.onclick = function () {
-      if (window.__wx_channels_start_comment_collection) {
-        window.__wx_channels_start_comment_collection();
-      }
+      __start_feed_comment_collection_with_open_panel();
     };
 
     // 创建下载图标
-    var downloadIconWrapper = document.createElement('div');
-    downloadIconWrapper.id = 'wx-feed-download-icon';
-    downloadIconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
-    downloadIconWrapper.title = '下载视频';
-    // SVG: 下载 Icon (Outline style, stroke-width=1.5)
-    downloadIconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>';
+    var downloadIconWrapper = __build_feed_header_icon(
+      'wx-feed-download-icon',
+      '下载视频',
+      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path fill-rule="evenodd" clip-rule="evenodd" d="M12 3C12.3314 3 12.6 3.26863 12.6 3.6V13.1515L15.5757 10.1757C15.8101 9.94142 16.1899 9.94142 16.4243 10.1757C16.6586 10.4101 16.6586 10.7899 16.4243 11.0243L12.4243 15.0243C12.1899 15.2586 11.8101 15.2586 11.5757 15.0243L7.57574 11.0243C7.34142 10.7899 7.34142 10.4101 7.57574 10.1757C7.81005 9.94142 8.18995 9.94142 8.42426 10.1757L11.4 13.1515V3.6C11.4 3.26863 11.6686 3 12 3ZM3.6 14.4C3.93137 14.4 4.2 14.6686 4.2 15V19.2C4.2 19.5314 4.46863 19.8 4.8 19.8H19.2C19.5314 19.8 19.8 19.5314 19.8 19.2V15C19.8 14.6686 20.0686 14.4 20.4 14.4C20.7314 14.4 21 14.6686 21 15V19.2C21 20.1941 20.1941 21 19.2 21H4.8C3.80589 21 3 20.1941 3 19.2V15C3 14.6686 3.26863 14.4 3.6 14.4Z" fill="currentColor"></path></svg>'
+    );
 
     downloadIconWrapper.onclick = function () {
       __handle_feed_download_click();
     };
 
     // Create Export icon
-    var exportIconWrapper = document.createElement('div');
-    exportIconWrapper.id = 'wx-feed-export-icon';
-    exportIconWrapper.className = 'mr-4 h-6 w-6 flex-initial flex-shrink-0 text-fg-0 cursor-pointer';
-    exportIconWrapper.title = '导出CSV';
-    // SVG: 文件 Icon (Outline style, stroke-width=1.5)
-    exportIconWrapper.innerHTML = '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>';
+    var exportIconWrapper = __build_feed_header_icon(
+      'wx-feed-export-icon',
+      '导出CSV',
+      '<svg class="h-full w-full" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M8 3.75h5.25L18 8.5v11.75H8c-1.1 0-2-.9-2-2V5.75c0-1.1.9-2 2-2Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M13 3.75V8.5h5" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"></path><path d="M9.5 12.5h5M9.5 15.5h5M9.5 18.5h3.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></path></svg>'
+    );
 
     exportIconWrapper.onclick = function () {
       __handle_export_click();
@@ -120,28 +499,18 @@ async function __insert_download_btn_to_feed_toolbar() {
 
 /** Feed页面下载按钮点击处理 */
 function __handle_feed_download_click() {
-  var profile = window.__wx_channels_store__ && window.__wx_channels_store__.profile;
+  var profile = __sync_feed_profile_with_runtime(false);
 
-  if (!profile) {
+  if (!profile || !profile.url) {
     __wx_log({ msg: '⏳ 正在获取视频数据，请稍候...' });
 
-    // 等待数据
-    var checkCount = 0;
-    var maxChecks = 30;
-    var checkData = function () {
-      profile = window.__wx_channels_store__ && window.__wx_channels_store__.profile;
-      if (profile) {
-        __show_feed_download_options(profile);
+    __resolve_current_feed_profile(12, 180).then(function (resolvedProfile) {
+      if (resolvedProfile) {
+        __show_feed_download_options(resolvedProfile);
       } else {
-        checkCount++;
-        if (checkCount < maxChecks) {
-          setTimeout(checkData, 100);
-        } else {
-          __wx_log({ msg: '❌ 获取视频数据超时\n请刷新页面重试' });
-        }
+        __wx_log({ msg: '❌ 获取当前视频数据超时\n请翻到目标视频后重试' });
       }
-    };
-    checkData();
+    });
     return;
   }
 
@@ -160,7 +529,7 @@ function __show_feed_download_options(profile) {
 
   var menu = document.createElement('div');
   menu.id = 'wx-download-menu';
-  menu.style.cssText = 'position:fixed;top:60px;right:20px;z-index:99999;background:#2b2b2b;color:#e5e5e5;border-radius:8px;padding:0;width:280px;box-shadow:0 8px 24px rgba(0,0,0,0.5);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:14px;';
+  menu.style.cssText = 'position:fixed;z-index:99999;background:#2b2b2b;color:#e5e5e5;border-radius:8px;padding:0;width:280px;box-shadow:0 8px 24px rgba(0,0,0,0.5);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:14px;';
 
   var title = profile.title || '未知视频';
   var shortTitle = title.length > 30 ? title.substring(0, 30) + '...' : title;
@@ -203,6 +572,19 @@ function __show_feed_download_options(profile) {
   menu.innerHTML = html;
   document.body.appendChild(menu);
 
+  var anchor = document.getElementById('wx-feed-download-icon');
+  if (anchor && anchor.getBoundingClientRect) {
+    var rect = anchor.getBoundingClientRect();
+    var menuWidth = 280;
+    var left = Math.max(16, Math.min(rect.right - menuWidth, window.innerWidth - menuWidth - 16));
+    var top = Math.max(56, rect.bottom + 12);
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+  } else {
+    menu.style.top = '60px';
+    menu.style.right = '20px';
+  }
+
   // 添加遮罩
   var overlay = document.createElement('div');
   overlay.id = 'wx-download-overlay';
@@ -241,9 +623,14 @@ function __show_feed_download_options(profile) {
 /** Feed页面按钮注入入口 */
 async function __insert_download_btn_to_feed_page() {
   console.log('[feed.js] 开始注入Feed页面按钮到顶部工具栏...');
+  __start_feed_slide_monitor();
 
   var success = await __insert_download_btn_to_feed_toolbar();
-  if (success) return true;
+  if (success) {
+    setTimeout(function () { __sync_feed_profile_with_runtime(true); }, 120);
+    setTimeout(function () { __sync_feed_profile_with_runtime(false); }, 500);
+    return true;
+  }
 
   console.log('[feed.js] 未找到Feed页面工具栏');
   return false;
@@ -311,3 +698,18 @@ async function __handle_export_click() {
 }
 
 console.log('[feed.js] Feed页面模块加载完成');
+
+if (typeof WXE !== 'undefined') {
+  WXE.onGotoNextFeed(function (feed) {
+    __remember_current_feed(feed, 'goto-next');
+  });
+  WXE.onGotoPrevFeed(function (feed) {
+    __remember_current_feed(feed, 'goto-prev');
+  });
+  WXE.onFeed(function (feed) {
+    __remember_current_feed(feed, 'feed-event');
+  });
+  WXE.onFetchFeedProfile(function (feed) {
+    __remember_current_feed(feed, 'feed-profile');
+  });
+}

@@ -25,6 +25,7 @@ const (
 	SettingKeyAutoCleanupEnabled = "auto_cleanup_enabled"
 	SettingKeyAutoCleanupDays    = "auto_cleanup_days"
 	SettingKeyMaxRetries         = "max_retries"
+	SettingKeyRadarEnabled       = "radar_enabled"
 	SettingKeyTheme              = "theme"
 )
 
@@ -120,6 +121,9 @@ func (r *SettingsRepository) Load() (*Settings, error) {
 			settings.MaxRetries = retries
 		}
 	}
+	if v, ok := settingsMap[SettingKeyRadarEnabled]; ok {
+		settings.RadarEnabled = v == "true"
+	}
 	if v, ok := settingsMap[SettingKeyTheme]; ok && v != "" {
 		settings.Theme = v
 	}
@@ -150,6 +154,7 @@ func (r *SettingsRepository) Save(settings *Settings) error {
 		SettingKeyAutoCleanupEnabled: strconv.FormatBool(settings.AutoCleanupEnabled),
 		SettingKeyAutoCleanupDays:    strconv.Itoa(settings.AutoCleanupDays),
 		SettingKeyMaxRetries:         strconv.Itoa(settings.MaxRetries),
+		SettingKeyRadarEnabled:       strconv.FormatBool(settings.RadarEnabled),
 		SettingKeyTheme:              settings.Theme,
 	}
 
